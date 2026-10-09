@@ -153,10 +153,10 @@ weak symbols: an app's `tools/preview/pv_app.c` defines the strong
 `pv_syscall` (PS3 Health: the drive from a console's sector dumps, 383 and
 409) or a fake socket. `tools/preview/README.md` has the raster, the back
 end, the gfx traces (`PV_GFXTRACE`), `diff.py` and the pad scripts.
-`tools/preview/smoke/` is the smallest app, for CI. On the host the
-library's own sources include their headers by bare name (`"ui.h"`), and so
-does the smoke; an app that includes `<ps3gfx/...>` needs those headers
-reachable on the host too, which the preview does not provide yet.
+`tools/preview/smoke/` is the smallest app, for CI. On the host an app
+includes `<ps3gfx/ui.h>` as on the console: `tools/preview/stub/ps3gfx/`
+holds four forwarders to the checkout's own headers, so the preview builds
+against the sources it previews, never against the installed copy.
 
 ## Tests
 

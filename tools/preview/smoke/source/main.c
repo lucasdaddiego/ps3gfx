@@ -1,11 +1,11 @@
 /* The preview smoke: the smallest app on the frame, for the host only (CI
  * builds it with tools/preview/build.zsh APP=tools/preview/smoke and takes
  * one snapshot). No Makefile, no sfo.xml, no title id: it never runs on a
- * console. An app on the console includes <ps3gfx/ui.h>; the host preview
- * finds the library's headers by their bare names. */
+ * console. It includes the headers as an app on the console does; the host
+ * preview resolves <ps3gfx/...> to the checkout's own headers. */
 #include <stdlib.h>
-#include "ui.h"
-#include "fs.h"
+#include <ps3gfx/ui.h>
+#include <ps3gfx/fs.h>
 
 #define SMOKE_DIR "/dev_hdd0/tmp/ps3gfx_smoke"
 
