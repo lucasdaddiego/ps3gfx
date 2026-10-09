@@ -1,0 +1,9 @@
+# --- regenerable build artifacts (make, tools/preview/build.zsh) ---
+build/
+lib/
+*.elf
+*.self
+*.pkg
+*.map
+__pycache__/
+tools/preview/*/build/

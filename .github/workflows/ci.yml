@@ -1,0 +1,132 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host:
+    name: Host test and preview smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+
+      - name: Shell syntax and Python scripts compile
+        run: |
+          sudo apt-get install -y -qq zsh > /dev/null
+          zsh -n tools/preview/build.zsh
+          zsh -n source/gfx/programs.zsh
+          zsh -n sdk_setup.sh
+          python3 -I -m py_compile art/make_font.py tools/preview/diff.py
+
+      - name: Host test (the freeze journal in a temp folder)
+        run: |
+          cc -std=c99 -Wall -Wextra -I tools/preview/stub -I source -o test_journal test/test_journal.c source/journal.c source/fs.c test/lv2fs_stub.c
+          ./test_journal
+
+      - name: Preview smoke (the world on gcc, one snapshot)
+        run: |
+          zsh tools/preview/build.zsh APP=tools/preview/smoke
+          t=$(mktemp -d)
+          mkdir -p "$t/dev_hdd0/tmp"
+          PV_ROOT=$t PV_OUT=$t PV_SCRIPT="3:SNAP=home 4:EXIT" tools/preview/smoke/tools/preview/build/pv
+          test -s "$t/home.ppm"
+          head -c 2 "$t/home.ppm" | grep -q P6
+          grep -q start "$t/dev_hdd0/tmp/ps3gfx_smoke/starts.txt"
+
+  ppu:
+    name: PS3 archive (Linux ps3dev bundle)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/ps3dev-sdk
+
+      # On every push, not only on a cache miss: the cache holds whichever
+      # archive first filled it.
+      - name: make and make install
+        run: |
+          make
+          make install
+          ls -la lib/libps3gfx.a "$PS3DEV/portlibs/ppu/lib/libps3gfx.a" "$PS3DEV/portlibs/ppu/include/ps3gfx" "$PS3DEV/portlibs/ppu/share/ps3gfx"
+          cat "$PS3DEV/portlibs/ppu/share/ps3gfx/COMMIT"
+
+      # The three functions are D (PPC64 ELFv1: the global symbol is the
+      # function descriptor in .opd), fonts_bin is R. Every undefined symbol
+      # that another member does not define must be PSL1GHT's or the
+      # toolchain's (newlib, libsysbase): the sysLv2Fs* calls are inline
+      # syscalls, never U.
+      - name: ppu-nm checks (the public names, no undefined symbol outside PSL1GHT and newlib)
+        run: |
+          ppu-nm lib/libps3gfx.a > nm.txt
+          for s in gfx_init ui_init journal_start; do grep -Eq " [TD] $s\$" nm.txt || { echo "no $s in the archive"; exit 1; }; done
+          grep -Eq ' R fonts_bin$' nm.txt || { echo "no fonts_bin in the archive"; exit 1; }
+          awk '$1=="U"{u[$2]=1} ($2 ~ /^[TRDBC]$/){d[$3]=1} END{for(s in u) if(!(s in d)) print s}' nm.txt | sort > undefined.txt
+          cat > allowed.txt <<'EOF'
+          cosf
+          exit
+          floorf
+          gcmAddressToOffset
+          gcmGetConfiguration
+          gcmGetControlRegister
+          gcmGetFlipStatus
+          gcmGetLabelAddress
+          gcmInitBody
+          gcmResetFlipStatus
+          gcmSetDisplayBuffer
+          gcmSetFlip
+          gcmSetFlipMode
+          gcmSetWaitFlip
+          ioPadEnd
+          ioPadGetData
+          ioPadGetInfo
+          ioPadInit
+          memalign
+          memcpy
+          sinf
+          snprintf
+          sqrtf
+          sscanf
+          strcat
+          strchr
+          strcmp
+          strlen
+          strncmp
+          strstr
+          strtok
+          sysGetSystemTime
+          sysThreadCreate
+          sysThreadExit
+          sysUtilCheckCallback
+          sysUtilRegisterCallback
+          sysUtilUnregisterCallback
+          usleep
+          videoConfigure
+          videoGetResolution
+          videoGetState
+          vsnprintf
+          EOF
+          extra=$(comm -23 undefined.txt allowed.txt)
+          if [ -n "$extra" ]; then echo "undefined symbols outside the allowlist: $extra"; exit 1; fi
+          echo "undefined symbols: $(tr '\n' ' ' < undefined.txt)"
+
+      # Later, when PS3 Health links the library (design section 4): a checkout
+      # of Health at a pinned sha, its sdk_setup.sh, this commit installed over
+      # the pinned archive, make -C health pkg and Health's tools/syscalls.py on
+      # its ELF.
