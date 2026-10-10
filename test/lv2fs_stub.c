@@ -1,4 +1,4 @@
-/* The sysLv2Fs* calls of the stub sys/file.h on POSIX, for test_journal.c:
+/* The sysLv2Fs* calls of the stub sys/file.h on POSIX, for test_journal.c and test_fs.c:
  * no path mapping (the test passes a temp folder to journal_init), and
  * stub_fail_writes refuses every open for writing with the LV2 rc that the
  * preview's sandbox returns, so a test can see a failed write. */
@@ -29,3 +29,4 @@ s32 sysLv2FsWrite(s32 fd, const void *b, u64 l, u64 *n) { ssize_t r = write(fd, 
 s32 sysLv2FsLSeek64(s32 fd, s64 off, s32 wh, u64 *pos) { off_t r = lseek(fd, off, wh); if (r < 0) return -1; *pos = (u64)r; return 0; }
 s32 sysLv2FsFsync(s32 fd) { (void)fd; return 0; }
 s32 sysLv2FsMkdir(const char *path, s32 mode) { (void)mode; return mkdir(path, 0777) ? (s32)0x80010006 : 0; }
+s32 sysLv2FsUnlink(const char *path) { return unlink(path) ? (s32)0x80010006 : 0; }

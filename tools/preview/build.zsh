@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Build an app's host preview, $APP/tools/preview/build/pv: the app's own
 # sources and its tools/preview/*.c (pv_app.c: the strong pv_syscall, a fake
-# socket), the library's ui.c, fs.c and journal.c, the world in stubs.c, and
+# socket), the library's source/*.c, the world in stubs.c, and
 # the real source/gfx/gfx.c on the preview's back end (gfx_soft.c), all
 # against the stub headers. gfx_rsx.c is never compiled on the host.
 #   zsh tools/preview/build.zsh APP=<app folder>      (the folder with source/)
@@ -29,7 +29,7 @@ CC=(cc -O2 -std=gnu11 -Wall -Wno-unused-variable -Wno-unused-parameter -Wno-inco
 $CC -Dgfx_init=gfx_real_init -Dgfx_viewport=gfx_real_viewport -Dgfx_begin=gfx_real_begin -Dgfx_texture=gfx_real_texture \
     -Dgfx_prim=gfx_real_prim -Dgfx_block=gfx_real_block -Dgfx_end=gfx_real_end -c "$L/source/gfx/gfx.c" -o "$O/gfx.o"
 # (N): an app without a tools/preview/*.c of its own builds too
-$CC -o "$O/pv" "$APP"/source/*.c "$APP"/tools/preview/*.c(N) "$L/source/ui.c" "$L/source/fs.c" "$L/source/journal.c" \
+$CC -o "$O/pv" "$APP"/source/*.c "$APP"/tools/preview/*.c(N) "$L"/source/*.c \
     "$L/tools/preview/stubs.c" "$L/tools/preview/gfx_soft.c" "$L/tools/preview/gfx_trace.c" "$L/tools/preview/raster.c" \
     "$O/fonts_bin.c" "$O/gfx.o" -lm -lpthread
 print "built $O/pv"

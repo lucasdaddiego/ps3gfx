@@ -18,7 +18,7 @@ python3 tools/preview/diff.py A B [D]             # pixel diff of two snapshot f
 ```
 
 `build.zsh` compiles `$APP/source/*.c`, `$APP/tools/preview/*.c` (none is
-fine), the library's `ui.c`, `fs.c` and `journal.c`, the world and `gfx.c`
+fine), the library's `source/*.c`, the world and `gfx.c`
 with its API renamed to `gfx_real_*` (the trace wrapper below). The sandbox
 must hold the parents of the app folder (`mkdir -p $sandbox/dev_hdd0/tmp`):
 `sysLv2FsMkdir` makes one level, as on the console. `smoke/` is the smallest

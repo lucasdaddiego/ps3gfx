@@ -50,6 +50,8 @@ the memory layout, the source of each RSX word and the shader recipe):
 
 `<ps3gfx/fs.h>`, whole files through the `sysLv2Fs*` syscalls:
 - `fs_write_file`, `fs_read_file`, `fs_selftest(dir, &mkdir_rc, &open_rc, &write_rc)`
+- `fs_read_line`, `fs_write_line`, `fs_remove`: one-line settings files and a delete (`fs_line.c`, linked
+  only by an app that calls one)
 
 Every name is PS3 Health's, except the additions of 2026-10-09 for Cell
 Bench: the `format` field of `gfx_tex` with A8R8G8B8 (an 8-bit picture
@@ -67,7 +69,9 @@ library builds unchanged. The additions of 2026-10-10:
 - `gfx_tex_new` and `tex_rect`: a texture and a picture in one call each
   (the smoke app draws its texture with them);
 - for editors and an app's own text helpers: `pad_repeat`, `num_field`,
-  `text_wrap_lines`, the va_list text calls and `status_linef`.
+  `text_wrap_lines`, the va_list text calls and `status_linef`;
+- `fs_read_line`, `fs_write_line` and `fs_remove`, for a settings file such
+  as Couch's LP10 address.
 
 ## The runtime pin
 
@@ -187,6 +191,10 @@ against the sources it previews, never against the installed copy.
   `sys/file.h` and `test/lv2fs_stub.c` (froze at the next load, a skip
   persists, clear, compaction over 16 KB, the 32 KB tail, a done after froze,
   a failed write, the name past the table, a name of 24 characters or more): `cc -std=c99 -Wall -Wextra -I tools/preview/stub -I source test/test_journal.c source/journal.c source/fs.c test/lv2fs_stub.c`.
+- `test/test_fs.c`: the one-line files of `fs_line.c` in a temp folder
+  (a missing file, CR LF, no line end, an empty file, the edges, a cut at n,
+  the 254-character limit, a write that replaces, a remove):
+  `cc -std=c99 -Wall -Wextra -I tools/preview/stub -I source test/test_fs.c source/fs_line.c source/fs.c test/lv2fs_stub.c`.
 - `test/test_gfx.c`: gfx's front end (`source/gfx/gfx.c`) on a back end that
   records the draws, with an area of 409 vertices (the batching, the bounds of
   `gfx_prim`, the drains, the blocks, the viewport, the frame): `cc -std=c99 -Wall -Wextra -DGFX_VTX_BYTES=8192 -I tools/preview/stub -I source/gfx test/test_gfx.c source/gfx/gfx.c`.
@@ -207,7 +215,7 @@ against the sources it previews, never against the installed copy.
 - The RSX-word harness (outside the repository) replays recorded traces
   through `source/gfx/` on a host model of the RSX and compares the words
   with PS3 Health 2.0.1's.
-- CI (`.github/workflows/ci.yml`): the host job runs the journal and gfx tests, the kit check, the
+- CI (`.github/workflows/ci.yml`): the host job runs the journal, file and gfx tests, the kit check, the
   script and Python checks and the smoke preview on gcc with one snapshot and its texture check;
   the ppu job builds and installs the archive with the same `sdk_setup.sh`
   and runs the `ppu-nm` checks.
