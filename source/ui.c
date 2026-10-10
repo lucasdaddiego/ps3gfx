@@ -505,6 +505,7 @@ void tabs(const char *const *names, int n, int sel)
 static const struct { const char *name; unsigned btn; } button_names[] = {
     {"CROSS", BTN_CROSS}, {"CIRCLE", BTN_CIRCLE}, {"TRIANGLE", BTN_TRIANGLE}, {"SQUARE", BTN_SQUARE},
     {"START", 0}, {"SELECT", 0}, {"R2", 0}, {"UP/DOWN", 0}, {"LEFT/RIGHT", 0}, {"D-pad", 0},
+    {"L1", 0}, {"R1", 0}, {"L2", 0}, {"L3", 0}, {"R3", 0}, {"L1/R1", 0}, {"L2/R2", 0},
 };
 
 /* The button line: each item starts with a button name, drawn as the face
