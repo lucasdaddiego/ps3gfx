@@ -13,6 +13,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <net/net.h>
+#include <sysutil/sysutil.h>
 #include <ps3gfx/ui.h>
 #include <ps3gfx/gfx.h>
 #include <ps3gfx/fs.h>
@@ -170,6 +171,9 @@ static void net(void)
     CHECK(netSocket(AF_INET, SOCK_STREAM, 0) == -1 && netRecv(0, b, 1, MSG_DONTWAIT) == -1);
     CHECK(netPoll(&p, 1, 0) == -1 && netGetSockOpt(0, SOL_SOCKET, SO_ERROR, &e, &l) == -1 && netShutdown(0, SHUT_RDWR) == -1);
     CHECK(net_errno == NET_ENETDOWN && NET_EWOULDBLOCK == 35 && NET_EINPROGRESS == 36);
+    s32 tz = 0, fmt = 0;                                  /* the system settings: UTC-3, 24 hours */
+    CHECK(sysUtilGetSystemParamInt(SYSUTIL_SYSTEMPARAM_ID_TIMEZONE, &tz) == 0 && tz == -180);
+    CHECK(sysUtilGetSystemParamInt(SYSUTIL_SYSTEMPARAM_ID_TIME_FORMAT, &fmt) == 0 && fmt == 1);
 }
 
 int main(void)

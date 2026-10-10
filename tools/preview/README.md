@@ -39,7 +39,9 @@ The weak list is at the end of `stubs.c`: every socket call of PSL1GHT's
 `net/net.h` that a TCP or UDP client uses (also `netPoll`, `netSelect`,
 `netGetSockOpt`, `netShutdown`, `netErrnoLoc` for `net_errno`), each failing,
 and the stub headers have PSL1GHT's constants (`SO_ERROR`, `MSG_DONTWAIT`,
-`NET_EWOULDBLOCK` ...), so an app's network code compiles in the preview.
+`NET_EWOULDBLOCK` ...), so an app's network code compiles in the preview. Also weak:
+`sysUtilGetSystemParamInt` with the `SYSUTIL_SYSTEMPARAM_ID_*` ids, which answers a console at
+UTC-3 with 24-hour time (TIMEZONE -180, SUMMERTIME 0, TIME_FORMAT 1).
 
 ## The raster
 

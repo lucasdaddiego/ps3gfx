@@ -192,6 +192,23 @@ u32 ioPadSetActDirect(u32 p, padActParam *a) { (void)p; (void)a; return 0; }
 s32 sysUtilRegisterCallback(s32 s, sysutilCallback cb, void *u) { (void)s; (void)cb; (void)u; return 0; }
 s32 sysUtilUnregisterCallback(s32 s) { (void)s; return 0; }
 s32 sysUtilCheckCallback(void) { return 0; }
+/* The system settings, weak: an app's pv_app.c can define its own. The preview's console runs
+ * at UTC-3 with 24-hour time (TIME_FORMAT 1, TIMEZONE -180 minutes, no summer time). */
+__attribute__((weak)) s32 sysUtilGetSystemParamInt(s32 id, s32 *value)
+{
+    switch (id) {
+    case SYSUTIL_SYSTEMPARAM_ID_TIME_FORMAT: *value = 1; return 0;
+    case SYSUTIL_SYSTEMPARAM_ID_TIMEZONE: *value = -180; return 0;
+    case SYSUTIL_SYSTEMPARAM_ID_SUMMERTIME: *value = 0; return 0;
+    default: return (s32)0x8002b102;                     /* an error rc: no other setting */
+    }
+}
+__attribute__((weak)) s32 sysUtilGetSystemParamString(s32 id, char *buf, u32 bufsize)
+{
+    (void)id;
+    if (bufsize) buf[0] = 0;
+    return (s32)0x8002b102;
+}
 u64 sysGetSystemTime(void) { return sim_us; }
 s32 sysGetCurrentTime(u64 *sec, u64 *nsec) { *sec = 1791460800ull + sim_us / 1000000; *nsec = 0; return 0; }
 s32 sysUsleep(u32 us) { (void)us; usleep(1000); return 0; }
