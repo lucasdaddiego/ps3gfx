@@ -38,6 +38,11 @@ jobs:
           cc -std=c99 -Wall -Wextra -I tools/preview/stub -I source -o test_journal test/test_journal.c source/journal.c source/fs.c test/lv2fs_stub.c
           ./test_journal
 
+      - name: Host test (gfx's front end on a recording back end, an area of 409 vertices)
+        run: |
+          cc -std=c99 -Wall -Wextra -DGFX_VTX_BYTES=8192 -I tools/preview/stub -I source/gfx -o test_gfx test/test_gfx.c source/gfx/gfx.c
+          ./test_gfx
+
       - name: Preview smoke (the world on gcc, one snapshot)
         run: |
           zsh tools/preview/build.zsh APP=tools/preview/smoke

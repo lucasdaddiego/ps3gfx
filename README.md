@@ -174,6 +174,9 @@ against the sources it previews, never against the installed copy.
   `sys/file.h` and `test/lv2fs_stub.c` (froze at the next load, a skip
   persists, clear, compaction over 16 KB, the 32 KB tail, a done after froze,
   a failed write, the name past the table): `cc -std=c99 -Wall -Wextra -I tools/preview/stub -I source test/test_journal.c source/journal.c source/fs.c test/lv2fs_stub.c`.
+- `test/test_gfx.c`: gfx's front end (`source/gfx/gfx.c`) on a back end that
+  records the draws, with an area of 409 vertices (the batching, the bounds of
+  `gfx_prim`, the drains, the viewport, the frame): `cc -std=c99 -Wall -Wextra -DGFX_VTX_BYTES=8192 -I tools/preview/stub -I source/gfx test/test_gfx.c source/gfx/gfx.c`.
 - `tools/preview/smoke/check_tex8.py` (CI): the smoke app draws a 4 x 4
   A8R8G8B8 texture 64 px a texel, and each texel's colour must fill its block
   in the snapshot (the preview's 8-bit texture path).
@@ -185,7 +188,7 @@ against the sources it previews, never against the installed copy.
 - The RSX-word harness (outside the repository) replays recorded traces
   through `source/gfx/` on a host model of the RSX and compares the words
   with PS3 Health 2.0.1's.
-- CI (`.github/workflows/ci.yml`): the host job runs the journal test, the
+- CI (`.github/workflows/ci.yml`): the host job runs the journal and gfx tests, the
   script and Python checks and the smoke preview on gcc with one snapshot and its texture check;
   the ppu job builds and installs the archive with the same `sdk_setup.sh`
   and runs the `ppu-nm` checks.
