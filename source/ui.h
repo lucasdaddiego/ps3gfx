@@ -107,6 +107,10 @@ void ring(float cx, float cy, float r, float w, u32 c);
 void disc(float cx, float cy, float r, u32 c);
 void tri(float x0, float y0, float x1, float y1, float x2, float y2, u32 c);
 void poly_fan(float cx, float cy, const float *pts, int n, u32 c);      /* a filled shape around a centre */
+/* A texture of gfx.h (gfx_tex_new) drawn whole into a rect, in the corner
+ * order of rect; tint 0xffffffff shows the texels as they are. */
+struct gfx_tex;
+void tex_rect(const struct gfx_tex *t, float x, float y, float w, float h, u32 tint);
 void card(float x, float y, float w, float h);
 void bar(float x, float y, float w, float h, float frac, u32 c);        /* a track and its filled part */
 float heading(float x, float y, const char *s);                         /* a section label; the y under it */

@@ -361,6 +361,17 @@ void poly_fan(float cx, float cy, const float *pts, int n, u32 c)
     }
 }
 
+void tex_rect(const gfx_tex *t, float x, float y, float w, float h, u32 tint)
+{
+    gfx_texture(t);
+    gfx_vtx *q = gfx_prim(GFX_QUADS, 4);
+    q = gfx_put(q, x, y, tint, 0, 0);
+    q = gfx_put(q, x + w, y, tint, 1, 0);
+    q = gfx_put(q, x + w, y + h, tint, 1, 1);
+    gfx_put(q, x, y + h, tint, 0, 1);
+    gfx_texture(NULL);
+}
+
 void card(float x, float y, float w, float h) { round_rect(x, y, w, h, 16, PANEL); }
 
 void bar(float x, float y, float w, float h, float frac, u32 c)

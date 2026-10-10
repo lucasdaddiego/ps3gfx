@@ -31,6 +31,21 @@ int gfx_init(void)
     return gfx_be_init(GFX_VTX_BYTES, &area);
 }
 
+void *gfx_tex_new(gfx_tex *t, u16 w, u16 h, u16 format, u16 linear)
+{
+    if (!w || !h || w > 4096 || h > 4096 || format > GFX_TEX_A8R8G8B8) return NULL;
+    u32 pitch = ((u32)w * (format == GFX_TEX_A8R8G8B8 ? 4 : 2) + 63) & ~63u, offset;
+    void *p = gfx_vram(pitch * h, 128, &offset);
+    if (!p) return NULL;
+    t->offset = offset;
+    t->w = w;
+    t->h = h;
+    t->pitch = (u16)pitch;
+    t->linear = linear;
+    t->format = format;
+    return p;
+}
+
 /* Sends the open draw to the back end. */
 static void close_draw(void)
 {

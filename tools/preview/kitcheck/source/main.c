@@ -20,6 +20,17 @@
 static int fails;
 #define CHECK(c) do { if (!(c)) { printf("FAIL line %d: %s\n", __LINE__, #c); fails++; } } while (0)
 
+/* gfx_tex_new: rows rounded up to 64 bytes, the ranges */
+static void textures(void)
+{
+    gfx_tex t;
+    CHECK(gfx_tex_new(&t, 4, 4, GFX_TEX_A8R8G8B8, 0) && t.pitch == 64 && t.w == 4 && t.h == 4 && t.format == GFX_TEX_A8R8G8B8 && !t.linear);
+    CHECK(gfx_tex_new(&t, 100, 10, GFX_TEX_A4R4G4B4, 1) && t.pitch == 256 && t.linear == 1 && t.format == GFX_TEX_A4R4G4B4);
+    CHECK(gfx_tex_new(&t, 960, 540, GFX_TEX_A8R8G8B8, 1) && t.pitch == 3840 && t.offset % 128 == 0);
+    CHECK(gfx_tex_new(&t, 416, 210, GFX_TEX_A4R4G4B4, 0) && t.pitch == 832);
+    CHECK(!gfx_tex_new(&t, 0, 4, 0, 0) && !gfx_tex_new(&t, 4, 4097, 0, 0) && !gfx_tex_new(&t, 4, 4, 2, 0));
+}
+
 /* a block in the preview: the index of gfx.c, an address on a 128-byte line */
 static void block(void)
 {
@@ -37,6 +48,7 @@ int main(void)
     ui_init(&(const ui_app){"ps3gfx kitcheck", "0.0", DIR});
     CHECK(fs_selftest(DIR, &mk, &op, &wr) == 0);
     atexit(ui_end);
+    textures();
     block();
 
     ui_stat st;

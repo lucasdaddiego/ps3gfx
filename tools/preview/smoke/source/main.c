@@ -25,12 +25,10 @@ static u32 tex8_colour(int i, int j)
 
 static void tex8_make(void)
 {
-    u32 off = 0;
-    u32 *p = gfx_vram(4 * 64, 128, &off);   /* four rows of pitch 64 */
+    u32 *p = gfx_tex_new(&tex8, 4, 4, GFX_TEX_A8R8G8B8, 0);   /* four rows of pitch 64 */
     if (!p) return;
     for (int j = 0; j < 4; j++)
-        for (int i = 0; i < 4; i++) p[j * 16 + i] = tex8_colour(i, j);
-    tex8 = (gfx_tex){off, 4, 4, 64, 0, GFX_TEX_A8R8G8B8};
+        for (int i = 0; i < 4; i++) p[j * tex8.pitch / 4 + i] = tex8_colour(i, j);
     tex8_ok = 1;
 }
 
@@ -43,18 +41,7 @@ static void screen(void)
     text(MG + 32, y + 32, F_MED, WHITE, "One card on the frame");
     if (fs_ok) text(MG + 32, y + 92, F_BODY, GREY, "The app folder is writable: starts.txt has one more line.");
     else text(MG + 32, y + 92, F_BODY, YELLOW, "The app folder is not writable: mkdir %d, open %d, write %d.", fs_mk, fs_op, fs_wr);
-    if (tex8_ok) {
-        float x0 = MG + 32, y0 = y + 200;
-        gfx_texture(&tex8);
-        gfx_vtx *q = gfx_prim(GFX_QUADS, 4);
-        if (q) {
-            q = gfx_put(q, x0, y0, 0xffffffff, 0, 0);
-            q = gfx_put(q, x0 + 256, y0, 0xffffffff, 1, 0);
-            q = gfx_put(q, x0 + 256, y0 + 256, 0xffffffff, 1, 1);
-            gfx_put(q, x0, y0 + 256, 0xffffffff, 0, 1);
-        }
-        gfx_texture(NULL);
-    }
+    if (tex8_ok) tex_rect(&tex8, MG + 32, y + 200, 256, 256, 0xffffffff);
     footer("CROSS nothing  START exit");
     ui_flip();
 }

@@ -84,7 +84,9 @@ them, so the firmware does not need it.
 RSX local memory (`gcmGetConfiguration`) is a bump allocator that never gives
 anything back (`gfx_vram`): the two colour buffers (pitch x height each,
 aligned to 64), the two fragment programs (256 bytes each, aligned to 256),
-then the library's five font atlases and the RSX memory test. There is no depth
+then the library's five font atlases and the RSX memory test. `gfx_tex_new`
+takes a texture from it: rows rounded up to 64 bytes (the pitches that ran on
+the console: the font atlases and Cell Bench's 3,840), from a 128-byte line. There is no depth
 buffer: only colour target 0 is on, and the depth test, the depth write and
 the stencil test are off, so the zeta surface can point at the back buffer.
 The RSX never reads or writes it. There is no vertex buffer in RSX memory

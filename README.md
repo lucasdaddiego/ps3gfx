@@ -18,7 +18,7 @@ the memory layout, the source of each RSX word and the shader recipe):
 - `GFX_TRIANGLES`, `GFX_TRIANGLE_STRIP`, `GFX_TRIANGLE_FAN`, `GFX_QUADS`, `GFX_PRIM_MAX`
 - `gfx_vtx` (x, y, rgba, u, v: 20 bytes), `gfx_tex` (offset, w, h, pitch, linear, format), `GFX_TEX_A4R4G4B4`
   (0, the default: the font atlases), `GFX_TEX_A8R8G8B8`, `gfx_w`, `gfx_h`
-- `gfx_init`, `gfx_vram`, `gfx_viewport`, `gfx_begin`, `gfx_texture`, `gfx_prim`, `gfx_block` (one draw in one
+- `gfx_init`, `gfx_vram`, `gfx_tex_new` (a texture in that memory, rows rounded up to 64 bytes), `gfx_viewport`, `gfx_begin`, `gfx_texture`, `gfx_prim`, `gfx_block` (one draw in one
   piece from an aligned index, for a writer such as an SPU's DMA), `gfx_end`, `gfx_exit`, `gfx_put`
 - `gfx_last_counts` (the last frame's vertices, draws and drains)
 - the back end for gfx.c only: `gfx_be_init`, `gfx_be_begin`, `gfx_be_viewport`, `gfx_be_draw`, `gfx_be_drain`, `gfx_be_end`, `gfx_be_exit`
@@ -32,7 +32,7 @@ the memory layout, the source of each RSX word and the shader recipe):
 - text: `text`, `text_r`, `text_c`, `text_fit`, `text_wrap`, `wrap_step` (text_wrap's line step: the lines it
   drew times it is the height it took), `text_w`, `line_h`, `base_dy`
 - the kit: `rect`, `rect_v`, `round_rect`, `round_frame`, `frame`, `line`, `batch_begin`, `batch_rect`, `batch_line`, `batch_end`,
-  `ring`, `disc`, `tri`, `poly_fan`, `card`, `bar`, `heading`, `button_icon`, `spinner`, `background`, `option_card`, `test_card`, `TEST_RESULT_Y`,
+  `ring`, `disc`, `tri`, `poly_fan`, `tex_rect` (a texture drawn into a rect), `card`, `bar`, `heading`, `button_icon`, `spinner`, `background`, `option_card`, `test_card`, `TEST_RESULT_Y`,
   `screen_origin` (the canvas position of the screen's top left corner: a 1920 x 1080 rect from it covers the
   screen, as `background` does)
 - a screen: `begin_frame`, `title`, `title_right`, `tabs`, `footer`, `footer_at`, `status_line`, `ui_flip`,
@@ -62,7 +62,9 @@ library builds unchanged. The additions of 2026-10-10:
 - `gfx_block`, which replaces Cell Bench's padding quads and its 150 calls
   of `gfx_prim` for the galaxy;
 - `ui_stats` and `gfx_last_counts`: the first console numbers of the PPU's
-  time per frame, for a test build.
+  time per frame, for a test build;
+- `gfx_tex_new` and `tex_rect`: a texture and a picture in one call each
+  (the smoke app draws its texture with them).
 
 ## The runtime pin
 
@@ -187,7 +189,7 @@ against the sources it previews, never against the installed copy.
   `gfx_prim`, the drains, the blocks, the viewport, the frame): `cc -std=c99 -Wall -Wextra -DGFX_VTX_BYTES=8192 -I tools/preview/stub -I source/gfx test/test_gfx.c source/gfx/gfx.c`.
 - `tools/preview/kitcheck/` (CI): an app for the host only that calls the kit
   on the preview and checks the results against the rules of the headers:
-  the gfx_block index and address, and ui_stats on the preview's clock
+  the gfx_block index and address, gfx_tex_new's rows, and ui_stats on the preview's clock
   (16,667 us a frame, all of it in gfx_end). It exits 1 on a failed check.
 - `tools/preview/smoke/check_tex8.py` (CI): the smoke app draws a 4 x 4
   A8R8G8B8 texture 64 px a texel, and each texel's colour must fill its block

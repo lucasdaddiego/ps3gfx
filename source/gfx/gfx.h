@@ -34,7 +34,7 @@ typedef struct {
  * by it. */
 #define GFX_TEX_A4R4G4B4 0
 #define GFX_TEX_A8R8G8B8 1
-typedef struct {
+typedef struct gfx_tex {
     u32 offset;
     u16 w, h, pitch, linear;
     u16 format;                              /* GFX_TEX_* */
@@ -47,6 +47,12 @@ int gfx_init(void);                          /* 0, or the number of the step tha
  * NULL; NULL when it does not fit. After gfx_init only one thread at a time
  * may call it (the app: the RSX memory test). */
 void *gfx_vram(u32 size, u32 align, u32 *offset);
+/* A texture of w x h texels (1 to 4096 each) in that memory: rows of pitch
+ * bytes, w texels rounded up to 64 bytes, from a 128-byte line. It fills *t
+ * and returns the address of row 0, NULL when it does not fit or an argument
+ * is out of range. The caller writes row y at the address + y * t->pitch;
+ * a read of RSX memory is slow (about 0.5 us). */
+void *gfx_tex_new(gfx_tex *t, u16 w, u16 h, u16 format, u16 linear);
 void gfx_viewport(float tx, float ty, float sx, float sy);   /* pixel = canvas * s + t, at once */
 void gfx_begin(void);
 void gfx_texture(const gfx_tex *t);          /* for the next primitives; NULL: colour only */
