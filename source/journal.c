@@ -15,10 +15,13 @@ static int jcount, jloaded;
 
 void journal_init(const char *dir) { snprintf(jpath, sizeof jpath, "%s/journal.txt", dir); }
 
+/* The table keeps the first 23 characters of a name, as journal_load reads
+ * them from the file: a longer name matches its cut form, so its freeze
+ * holds. Two names with the same first 23 characters share one state. */
 static int *jstate(const char *name)
 {
     for (int i = 0; i < jcount; i++)
-        if (!strcmp(jst[i].name, name)) return &jst[i].state;
+        if (!strncmp(jst[i].name, name, sizeof jst[i].name - 1)) return &jst[i].state;
     if (jcount == JOURNAL_NAMES) return &jst[JOURNAL_NAMES - 1].state;
     snprintf(jst[jcount].name, sizeof jst[jcount].name, "%s", name);
     jst[jcount].state = J_NONE;

@@ -10,7 +10,7 @@
  * kept until SQUARE twice clears the journal. */
 enum { J_NONE, J_PENDING, J_OK, J_BAD, J_FROZEN, J_SKIPPED };
 
-#define JOURNAL_NAMES 64             /* the table: 64 names of at most 23 characters; more share the last slot */
+#define JOURNAL_NAMES 64             /* the table: 64 names, each by its first 23 characters; more share the last slot */
 
 void journal_init(const char *dir);                    /* the app folder: the file is <dir>/journal.txt */
 void journal_load(void);                               /* reads the tail of the file (the last 32 KB); a "start" without a "done" becomes froze; the others call it once, at their first use */

@@ -144,6 +144,30 @@ int main(void)
     CHECK(journal_state(before) == J_NONE);
     printf("name %d shares slot %d: ok\n", JOURNAL_NAMES + 1, JOURNAL_NAMES - 1);
 
+    /* 9. a name of 24 characters or more: the file has it whole, the table and
+     * the loader its first 23, so the freeze holds; a polled one is journaled
+     * once; a name with the same first 23 characters shares its state */
+    fresh();
+    const char *lng = "couch_lp10_reconnect_tcp";                 /* 24 characters */
+    CHECK(journal_start(lng) == 1);
+    journal_load();
+    CHECK(journal_state(lng) == J_FROZEN && journal_start(lng) == 0);
+    file();
+    CHECK(strcmp(buf, "start couch_lp10_reconnect_tcp\nfroze couch_lp10_reconnect_tc\n") == 0);
+    fresh();
+    for (int i = 0; i < 40; i++)                                   /* 40 polls of a 24-character name */
+        if (journal_needed("couch_board_weather_poll")) {
+            CHECK(journal_start("couch_board_weather_poll") == 1);
+            journal_done("couch_board_weather_poll", 0, 1);
+        }
+    int nl = 0;
+    file();
+    for (const char *c = buf; *c; c++) nl += *c == '\n';
+    CHECK(nl == 2);
+    CHECK(journal_state("couch_board_weather_pollen") == J_OK);
+    CHECK(journal_state("couch_board_weather") == J_NONE);
+    printf("a long name keeps its freeze: ok\n");
+
     unlink(path);
     rmdir(dir);
     if (fails) { printf("%d checks failed\n", fails); return 1; }

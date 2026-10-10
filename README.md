@@ -51,7 +51,8 @@ Every name is PS3 Health's, except the additions of 2026-10-09 for Cell
 Bench: the `format` field of `gfx_tex` with A8R8G8B8 (an 8-bit picture
 needs no dither), `wrap_step` and `screen_origin`, and a journal table of 64
 names (was 32: Cell Bench uses 31). The journal keeps a static table of 64
-names of at most 23 characters: an app passes a name at each call, and more
+names: an app passes a name at each call, the table keeps its first 23
+characters (two names with the same first 23 share one state), and more
 than 64 names share the last slot. `format` is the last field of `gfx_tex`,
 so an initializer without it gets A4R4G4B4, and an app built for the first
 library builds unchanged.
@@ -173,7 +174,7 @@ against the sources it previews, never against the installed copy.
 - `test/test_journal.c`: the freeze journal in a temp folder against the stub
   `sys/file.h` and `test/lv2fs_stub.c` (froze at the next load, a skip
   persists, clear, compaction over 16 KB, the 32 KB tail, a done after froze,
-  a failed write, the name past the table): `cc -std=c99 -Wall -Wextra -I tools/preview/stub -I source test/test_journal.c source/journal.c source/fs.c test/lv2fs_stub.c`.
+  a failed write, the name past the table, a name of 24 characters or more): `cc -std=c99 -Wall -Wextra -I tools/preview/stub -I source test/test_journal.c source/journal.c source/fs.c test/lv2fs_stub.c`.
 - `test/test_gfx.c`: gfx's front end (`source/gfx/gfx.c`) on a back end that
   records the draws, with an area of 409 vertices (the batching, the bounds of
   `gfx_prim`, the drains, the viewport, the frame): `cc -std=c99 -Wall -Wextra -DGFX_VTX_BYTES=8192 -I tools/preview/stub -I source/gfx test/test_gfx.c source/gfx/gfx.c`.
