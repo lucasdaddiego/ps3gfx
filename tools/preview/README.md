@@ -79,7 +79,8 @@ One line per call, integers in hex, floats as hex floats (`%a`, exact):
     gfx_vram 0x2aa80 0x80 = 0xfd2200       size, align = the RSX offset (or NULL)
     gfx_viewport 0x1.0cp+6 0x1.3p+5 0x1p+0 0x1p+0
     gfx_begin
-    gfx_texture 0xfd2200 0x1a0 0xd2 0x340 0    offset w h pitch linear, or NULL
+    gfx_texture 0xfd2200 0x1a0 0xd2 0x340 0    offset w h pitch linear [format], or NULL
+                                           (format only when not 0: 1 is A8R8G8B8)
     gfx_prim 8 4                           type n, then n vertex lines:
     v 0x1.28p+5 0x1.7p+4 0xf2f5faff 0x0p+0 0x1.b6db7p-2
                                            x y rgba u v, as the app wrote them
