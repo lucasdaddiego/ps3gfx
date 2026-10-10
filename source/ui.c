@@ -348,11 +348,17 @@ void tri(float x0, float y0, float x1, float y1, float x2, float y2, u32 c)
     gfx_put(q, x2, y2, c, 0, 0);
 }
 
+/* One fan holds the centre and GFX_PRIM_MAX - 1 points: a larger shape is
+ * more fans around the same centre, each from the last point of the one
+ * before. */
 void poly_fan(float cx, float cy, const float *pts, int n, u32 c)
 {
-    gfx_vtx *q = shape(GFX_TRIANGLE_FAN, n + 2);
-    q = gfx_put(q, cx, cy, c, 0, 0);
-    for (int k = 0; k <= n; k++) q = gfx_put(q, pts[(k % n) * 2], pts[(k % n) * 2 + 1], c, 0, 0);
+    for (int s = 0; s < n; s += GFX_PRIM_MAX - 2) {
+        int e = n - s > GFX_PRIM_MAX - 2 ? s + GFX_PRIM_MAX - 2 : n;
+        gfx_vtx *q = shape(GFX_TRIANGLE_FAN, e - s + 2);
+        q = gfx_put(q, cx, cy, c, 0, 0);
+        for (int k = s; k <= e; k++) q = gfx_put(q, pts[(k % n) * 2], pts[(k % n) * 2 + 1], c, 0, 0);
+    }
 }
 
 void card(float x, float y, float w, float h) { round_rect(x, y, w, h, 16, PANEL); }
