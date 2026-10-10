@@ -147,6 +147,12 @@ void status_line(const char *msg, u32 color);
 void status_linef(u32 color, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 void ui_flip(void);
 
+/* A screenshot: the colour buffer on the TV (gfx_front) as a binary PPM at
+ * path. Call it between ui_flip and the next begin_frame. The app stops for
+ * about 1.4 s at 1080p (0.6 s at 720p): the reads of RSX memory and the file.
+ * 0, or the LV2 rc (-1: no buffer or no memory for the rows). */
+int ui_shot(const char *path);
+
 /* The times of the frames that end in ui_flip, from the system clock in
  * microseconds: busy is the main thread's time from the end of one ui_flip to
  * the gfx_end of the next (the pad, the logic, the drawing), wait the time in

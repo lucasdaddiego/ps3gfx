@@ -57,6 +57,10 @@ the context, the display buffers and the flip.
   out, and gfx waits for the label, as `rsxFinish` does at exit in PSL1GHT's
   samples. Then the RSX is idle, and the ring holds no word that it has not
   read.
+- `gfx_front` gives the colour buffer on the TV between frames: after
+  `gfx_end` that is the buffer that `back` no longer names. The kit's
+  `ui_shot` reads it into a PPM; the PPU reads RSX memory at about 0.5 us a
+  word, so a 1080p picture takes about 1 s.
 - Each check of the init has its own step number. When one fails, the app
   writes the number to `gfx_init.txt` in its folder, because it has no
   picture to show it. Note: `gcmGetConfiguration` returns nothing in the

@@ -20,5 +20,6 @@ void raster_clear(u32 argb);
 /* n vertices of one primitive type; tex NULL = colour only */
 void raster_draw(int type, const raster_vtx *v, int n, const raster_tex *tex);
 u32 raster_pixel(int x, int y);              /* 0x00RRGGBB */
+const u32 *raster_buffer(void);              /* the colour buffer, rows of w pixels */
 
 #endif

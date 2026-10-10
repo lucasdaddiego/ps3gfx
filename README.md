@@ -20,7 +20,8 @@ the memory layout, the source of each RSX word and the shader recipe):
   (0, the default: the font atlases), `GFX_TEX_A8R8G8B8`, `gfx_w`, `gfx_h`
 - `gfx_init`, `gfx_vram`, `gfx_tex_new` (a texture in that memory, rows rounded up to 64 bytes), `gfx_viewport`, `gfx_begin`, `gfx_texture`, `gfx_prim`, `gfx_block` (one draw in one
   piece from an aligned index, for a writer such as an SPU's DMA), `gfx_end`, `gfx_exit`, `gfx_put`
-- `gfx_last_counts` (the last frame's vertices, draws and drains)
+- `gfx_last_counts` (the last frame's vertices, draws and drains), `gfx_front` (the colour buffer on the TV,
+  between frames)
 - the back end for gfx.c only: `gfx_be_init`, `gfx_be_begin`, `gfx_be_viewport`, `gfx_be_draw`, `gfx_be_drain`, `gfx_be_end`, `gfx_be_exit`
   (`gfx_rsx.c` on the console, the preview's `gfx_soft.c` on the host)
 
@@ -37,7 +38,8 @@ the memory layout, the source of each RSX word and the shader recipe):
   `screen_origin` (the canvas position of the screen's top left corner: a 1920 x 1080 rect from it covers the
   screen, as `background` does)
 - a screen: `begin_frame`, `title`, `title_right`, `tabs`, `footer`, `footer_at`, `status_line`, `status_linef`, `ui_flip`,
-  `ui_stat`, `ui_stats` (the busy, wait and period times of the frames, and gfx's counts)
+  `ui_stat`, `ui_stats` (the busy, wait and period times of the frames, and gfx's counts), `ui_shot` (the
+  TV picture as a PPM, `shot.c`)
 - the pad: `read_pad`, `gesture`, `ui_leave`, `pad_rep`, `pad_repeat` (a held button repeats after 350 ms, then every 30 ms)
 - a job: `job_cancel`, `progress`, `job_set_percent`, `run_job`, `run_job_cancelable` (`progress()` takes a string literal or a static buffer)
 - `first_run_prompt`
@@ -71,7 +73,10 @@ library builds unchanged. The additions of 2026-10-10:
 - for editors and an app's own text helpers: `pad_repeat`, `num_field`,
   `text_wrap_lines`, the va_list text calls and `status_linef`;
 - `fs_read_line`, `fs_write_line` and `fs_remove`, for a settings file such
-  as Couch's LP10 address.
+  as Couch's LP10 address;
+- `gfx_front` and `ui_shot`: a screenshot of the console's picture, to
+  compare with the preview's snapshot of the same screen (`diff.py` reads
+  PPM).
 
 ## The runtime pin
 
@@ -202,7 +207,8 @@ against the sources it previews, never against the installed copy.
   on the preview and checks the results against the rules of the headers:
   text_wrap_lines against text_wrap (5,250 cases), the va_list calls against the variadic ones (also past the
   319-byte cut), the preview's offline socket calls, gfx_tex_new's rows, num_field's width, the gfx_block index and address, pad_repeat's frames
-  with a held DOWN, and ui_stats on the preview's clock
+  with a held DOWN, ui_shot against the preview's own snapshot of the frame (CI compares the two files),
+  and ui_stats on the preview's clock
   (16,667 us a frame, all of it in gfx_end). It exits 1 on a failed check.
 - `tools/preview/smoke/check_tex8.py` (CI): the smoke app draws a 4 x 4
   A8R8G8B8 texture 64 px a texel, and each texel's colour must fill its block

@@ -71,6 +71,10 @@ gfx_vtx *gfx_prim(int type, int n);
 gfx_vtx *gfx_block(int type, u32 n, u32 align);
 void gfx_end(void);
 void gfx_exit(void);                         /* at exit: the RSX runs what is left (at most about 2 s) */
+/* The colour buffer on the TV, between a gfx_end and the next gfx_begin:
+ * gfx_h rows of *pitch bytes, gfx_w words 0x??RRGGBB each (the top byte is
+ * not alpha). It is RSX memory: about 0.5 us a read. NULL before gfx_init. */
+const volatile u32 *gfx_front(u32 *pitch);
 /* The last frame's counts at its gfx_end: the vertices drawn, the draws and
  * the drains; a NULL pointer is skipped. */
 void gfx_last_counts(u32 *vertices, u32 *draws, u32 *drains);

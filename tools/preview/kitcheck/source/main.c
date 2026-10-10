@@ -1,12 +1,13 @@
 /* The kit's host check: an app on the frame for the host only, as the smoke
  * app, that calls the kit and compares the results with the rules of ui.h
  * and gfx.h. CI runs it with a pad script that holds DOWN on frames 10 to 70
- * and again on 80 to 82:
+ * and again on 80 to 82, and a snapshot of frame 50:
  *   zsh tools/preview/build.zsh APP=tools/preview/kitcheck
  *   PV_ROOT=<sandbox with dev_hdd0/tmp> PV_OUT=<folder> \
- *       PV_SCRIPT="10-70:DOWN 80-82:DOWN" tools/preview/kitcheck/tools/preview/build/pv
+ *       PV_SCRIPT="10-70:DOWN 80-82:DOWN 50:SNAP=kit" tools/preview/kitcheck/tools/preview/build/pv
  * It prints each failed check and exits 1, or prints "kitcheck: all checks
- * passed" and exits 0 after frame 100. */
+ * passed" and exits 0 after frame 100. Frame 50's ui_shot, shot.ppm in the
+ * app folder, must equal the snapshot kit.ppm byte for byte (CI: cmp). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -145,6 +146,7 @@ int main(void)
         begin_frame();
         footer("L1 previous  R1 next  L1/R1 page  CROSS play");
         ui_flip();
+        if (f == 50) CHECK(ui_shot(DIR "/shot.ppm") == 0);    /* the snapshot's frame: the raster holds it */
     }
     int want[128] = {0}, ok = 1;
     want[10] = want[80] = 1;

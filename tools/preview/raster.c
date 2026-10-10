@@ -39,6 +39,7 @@ void raster_clear(u32 argb)
 }
 
 u32 raster_pixel(int x, int y) { return fb[y * fw + x]; }
+const u32 *raster_buffer(void) { return fb; }
 
 /* ---- texture -------------------------------------------------------------- */
 

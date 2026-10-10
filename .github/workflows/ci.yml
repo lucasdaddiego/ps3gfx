@@ -59,12 +59,13 @@ jobs:
           grep -q start "$t/dev_hdd0/tmp/ps3gfx_smoke/starts.txt"
           python3 -I tools/preview/smoke/check_tex8.py "$t/home.ppm"
 
-      - name: Kit check (the kit's rules on the preview)
+      - name: Kit check (the kit's rules on the preview, a screenshot against a snapshot)
         run: |
           zsh tools/preview/build.zsh APP=tools/preview/kitcheck
           t=$(mktemp -d)
           mkdir -p "$t/dev_hdd0/tmp"
-          PV_ROOT=$t PV_OUT=$t PV_SCRIPT="10-70:DOWN 80-82:DOWN" tools/preview/kitcheck/tools/preview/build/pv
+          PV_ROOT=$t PV_OUT=$t PV_SCRIPT="10-70:DOWN 80-82:DOWN 50:SNAP=kit" tools/preview/kitcheck/tools/preview/build/pv
+          cmp "$t/kit.ppm" "$t/dev_hdd0/tmp/ps3gfx_kitcheck/shot.ppm"
 
   ppu:
     name: PS3 archive (Linux ps3dev bundle)
@@ -100,6 +101,7 @@ jobs:
           cosf
           exit
           floorf
+          free
           gcmAddressToOffset
           gcmGetConfiguration
           gcmGetControlRegister
@@ -115,6 +117,7 @@ jobs:
           ioPadGetData
           ioPadGetInfo
           ioPadInit
+          malloc
           memalign
           memcpy
           sinf

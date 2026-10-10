@@ -156,3 +156,10 @@ void gfx_be_end(void)
 }
 
 void gfx_be_exit(void) {}                            /* gfx_be_end left nothing to draw */
+
+/* The raster's buffer: it holds the last frame that a snapshot rasterized. */
+const volatile u32 *gfx_front(u32 *pitch)
+{
+    if (pitch) *pitch = (u32)gfx_w * 4;
+    return area ? raster_buffer() : NULL;
+}

@@ -32,6 +32,7 @@ static int inval;                            /* the next draw invalidates the ve
 static int ready;                            /* the init has completed */
 static int back = 1;                         /* the colour buffer of the frame; 0 may be on the TV */
 static u32 pitch, rt_format, fb_off[2], fp_off[2], vtx_buf;
+static const volatile u32 *fb[2];           /* the colour buffers, for gfx_front */
 static int prog;                             /* the fragment program in use: 0 colour, 1 texture x colour */
 static const gfx_tex *bound;                 /* the texture on unit 0 in this frame */
 static u8 *vram_base;                        /* RSX local memory, for gfx_vram */
@@ -305,6 +306,14 @@ void gfx_be_end(void)
     back ^= 1;
 }
 
+/* After gfx_be_end the TV shows the buffer that back no longer names; before
+ * the first flip buffer 0 may be on it. */
+const volatile u32 *gfx_front(u32 *p)
+{
+    if (p) *p = pitch;
+    return ready ? fb[back ^ 1] : NULL;
+}
+
 /* At exit: the wait for the last flip and a label go out, and gfx waits for
  * the label, as rsxFinish does in PSL1GHT's samples. Then the RSX is idle and
  * the context holds no word that it has not read. */
@@ -350,7 +359,7 @@ int gfx_be_init(u32 vtx_bytes, gfx_vtx **area)
     vram_size = cfg.localSize;
     gcmSetFlipMode(GCM_FLIP_VSYNC);
     for (int b = 0; b < 2; b++) {
-        if (!gfx_vram(pitch * gfx_h, 64, &fb_off[b])) return 8;
+        if (!(fb[b] = gfx_vram(pitch * gfx_h, 64, &fb_off[b]))) return 8;
         if (gcmSetDisplayBuffer(b, fb_off[b], pitch, gfx_w, gfx_h)) return 9;
     }
     for (int p = 0; p < 2; p++) {            /* each in its own 256-byte block */
