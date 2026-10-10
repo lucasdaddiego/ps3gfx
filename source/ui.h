@@ -92,6 +92,16 @@ float vtext_c(float xc, float y, int font, u32 color, const char *fmt, va_list a
 float vtext_fit(float x, float y, int font, u32 color, float maxw, const char *fmt, va_list ap) __attribute__((format(printf, 6, 0)));
 int text_wrap(float x, float y, int font, u32 color, float maxw, int maxlines, const char *s);   /* the lines drawn */
 int text_wrap_lines(int font, float maxw, int maxlines, const char *s);   /* the lines text_wrap draws, with no draw */
+/* UTF-8 text, after ui_init (text_utf8.c: an app links it, its atlases and
+ * their 2.6 MB of RSX memory only when it calls it). Then the text calls
+ * decode UTF-8: U+00A0 to U+00FF, the rest of Windows-1252 (quotes, dashes,
+ * the euro, OE ...) and the primes draw from a second atlas per font; a letter
+ * of Latin Extended-A draws as its base letter; a combining mark and a
+ * zero-width code point draw nothing; any other code point, an invalid byte
+ * and U+FFFD draw a white square; a sequence cut by the 320-byte format
+ * buffer draws nothing. Widths, text_fit and text_wrap count code points. 0,
+ * or -1 when latin.bin is bad or RSX memory is short (the text stays ASCII). */
+int text_utf8(void);
 int wrap_step(int font);              /* text_wrap's line step: line_h + line_h / 6; the lines drawn times it is the height */
 int text_w(int font, const char *s);
 int line_h(int font);

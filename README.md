@@ -32,7 +32,8 @@ the memory layout, the source of each RSX word and the shader recipe):
 - the state: `quit`, `held`, `pressed`, `pad_last`, `pad_port`, `armed`, `ui_module`, `ui_demo`
 - text: `text`, `text_r`, `text_c`, `text_fit`, `vtext`, `vtext_r`, `vtext_c`, `vtext_fit` (the same with a
   va_list), `text_wrap`, `text_wrap_lines` (the lines text_wrap draws, with no draw), `wrap_step` (text_wrap's
-  line step: the lines it drew times it is the height it took), `text_w`, `line_h`, `base_dy`
+  line step: the lines it drew times it is the height it took), `text_w`, `line_h`, `base_dy`, `text_utf8`
+  (UTF-8 text: a Latin atlas per font, `text_utf8.c` with `latin.bin`, linked only by an app that calls it)
 - the kit: `rect`, `rect_v`, `round_rect`, `round_frame`, `frame`, `line`, `batch_begin`, `batch_rect`, `batch_line`, `batch_end`,
   `ring`, `disc`, `tri`, `poly_fan`, `tex_rect` (a texture drawn into a rect), `card`, `bar`, `heading`, `button_icon`, `spinner`, `background`, `option_card`, `test_card`, `TEST_RESULT_Y`, `num_field` (a number box of an editor),
   `screen_origin` (the canvas position of the screen's top left corner: a 1920 x 1080 rect from it covers the
@@ -76,7 +77,12 @@ library builds unchanged. The additions of 2026-10-10:
   as Couch's LP10 address;
 - `gfx_front` and `ui_shot`: a screenshot of the console's picture, to
   compare with the preview's snapshot of the same screen (`diff.py` reads
-  PPM).
+  PPM);
+- `text_utf8`: UTF-8 text for Couch's song titles. U+00A0 to U+00FF and the
+  rest of Windows-1252 draw from a second atlas per font (2.6 MB of RSX
+  memory, 673 KB in the app's ELF); Latin Extended-A draws its base letters,
+  other code points a white square. An app without the call keeps the byte
+  text and links neither.
 
 ## The runtime pin
 
@@ -100,9 +106,10 @@ make clean
 ```
 
 The Makefile is PSL1GHT's app Makefile cut to an archive: `SOURCES := source
-source/gfx`, `DATA := data` (bin2o makes `fonts.bin` a member of the archive
-with the symbols `fonts_bin`, `fonts_bin_end` and `fonts_bin_size`; `ui.o`
-depends on it for `fonts_bin.h`), and `CFLAGS = -O2 -Wall -mcpu=cell
+source/gfx`, `DATA := data` (bin2o makes `fonts.bin` and `latin.bin` members
+of the archive with the symbols `fonts_bin`, `fonts_bin_end`, `fonts_bin_size`
+and the same for `latin_bin`; `ui.o` and `text_utf8.o` depend on them for
+their headers), and `CFLAGS = -O2 -Wall -mcpu=cell
 $(MACHDEP) $(INCLUDE)`, PS3 Health 2.0.1's flags, so the code is the
 console-tested one. It errors when `PSL1GHT` or `PS3DEV` is unset (ppu_rules
 would default `PS3DEV` to `/usr/local/ps3dev`). The vertex area
@@ -208,7 +215,8 @@ against the sources it previews, never against the installed copy.
   text_wrap_lines against text_wrap (5,250 cases), the va_list calls against the variadic ones (also past the
   319-byte cut), the preview's offline socket calls, gfx_tex_new's rows, num_field's width, the gfx_block index and address, pad_repeat's frames
   with a held DOWN, ui_shot against the preview's own snapshot of the frame (CI compares the two files),
-  and ui_stats on the preview's clock
+  ui_stats on the preview's clock, and after text_utf8: ASCII measures and draws as before, the fallbacks,
+  the cut sequences and the text_fit and text_wrap breaks on whole code points
   (16,667 us a frame, all of it in gfx_end). It exits 1 on a failed check.
 - `tools/preview/smoke/check_tex8.py` (CI): the smoke app draws a 4 x 4
   A8R8G8B8 texture 64 px a texel, and each texel's colour must fill its block

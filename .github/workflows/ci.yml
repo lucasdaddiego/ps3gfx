@@ -86,16 +86,16 @@ jobs:
           ls -la lib/libps3gfx.a "$PS3DEV/portlibs/ppu/lib/libps3gfx.a" "$PS3DEV/portlibs/ppu/include/ps3gfx" "$PS3DEV/portlibs/ppu/share/ps3gfx"
           cat "$PS3DEV/portlibs/ppu/share/ps3gfx/COMMIT"
 
-      # The three functions are D (PPC64 ELFv1: the global symbol is the
-      # function descriptor in .opd), fonts_bin is R. Every undefined symbol
+      # The four functions are D (PPC64 ELFv1: the global symbol is the
+      # function descriptor in .opd), fonts_bin and latin_bin are R. Every undefined symbol
       # that another member does not define must be PSL1GHT's or the
       # toolchain's (newlib, libsysbase): the sysLv2Fs* calls are inline
       # syscalls, never U.
       - name: ppu-nm checks (the public names, no undefined symbol outside PSL1GHT and newlib)
         run: |
           ppu-nm lib/libps3gfx.a > nm.txt
-          for s in gfx_init ui_init journal_start; do grep -Eq " [TD] $s\$" nm.txt || { echo "no $s in the archive"; exit 1; }; done
-          grep -Eq ' R fonts_bin$' nm.txt || { echo "no fonts_bin in the archive"; exit 1; }
+          for s in gfx_init ui_init journal_start text_utf8; do grep -Eq " [TD] $s\$" nm.txt || { echo "no $s in the archive"; exit 1; }; done
+          for s in fonts_bin latin_bin; do grep -Eq " R $s\$" nm.txt || { echo "no $s in the archive"; exit 1; }; done
           awk '$1=="U"{u[$2]=1} ($2 ~ /^[TRDBC]$/){d[$3]=1} END{for(s in u) if(!(s in d)) print s}' nm.txt | sort > undefined.txt
           cat > allowed.txt <<'EOF'
           cosf

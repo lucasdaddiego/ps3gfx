@@ -18,6 +18,7 @@
 #include "fonts_bin.h"
 #include "fs.h"
 #include "journal.h"
+#include "ui_text.h"
 
 #define PI_F 3.14159265f
 
@@ -50,6 +51,8 @@ typedef struct {
 static font_t fonts[F_COUNT];
 static int font_first = 32, font_count = 106, font_cols = 16;
 static int text_linear = 1;
+static const ui_atlas *latin;                /* text_utf8's five Latin atlases; NULL: the text is bytes */
+static int (*latin_map)(unsigned cp);
 
 static unsigned rd16(const u8 *p) { return (unsigned)p[0] << 8 | p[1]; }
 static const u8 *align4(const u8 *p) { return p + (4 - (p - fonts_bin) % 4) % 4; }
@@ -105,8 +108,11 @@ static int glyph(int font, unsigned char c)
 
 static int adv(int font, unsigned char c) { return fonts[font & 0xff].adv[glyph(font, c)]; }
 
+static int width_utf8(int font, const char *s, int n);
+
 static int width_n(int font, const char *s, int n)
 {
+    if (latin) return width_utf8(font, s, n);
     int w = 0;
     for (int i = 0; i < n && s[i]; i++) w += adv(font, s[i]);
     return w;
@@ -117,10 +123,135 @@ int line_h(int font) { return fonts[font & 0xff].line; }
 int wrap_step(int font) { return line_h(font) + line_h(font) / 6; }
 int base_dy(int big, int small) { return fonts[big & 0xff].asc - fonts[small & 0xff].asc; }
 
+/* ---- UTF-8 (text_utf8.c): off until an app calls text_utf8 ----------------- */
+
+/* The UTF-8 paths stay out of the byte paths (noinline): with the text in
+ * bytes, run, width_n, vtext_fit and wrap keep their exact float code. */
+#define UTF8 static __attribute__((noinline))
+
+void ui_text_latin(const ui_atlas *l, int (*map)(unsigned cp))
+{
+    latin_map = map;
+    latin = l;
+}
+
+/* The code point at s[i], n bytes in all, and its length in *len. An invalid
+ * byte is U+FFFD of length 1; a valid start of a sequence that the end of s
+ * cuts (the 320-byte format buffer) is 0 of the rest's length: no glyph. */
+static unsigned utf8_at(const char *s, int n, int i, int *len)
+{
+    const unsigned char *p = (const unsigned char *)s + i;
+    unsigned c = p[0], cp;
+    int k = c >= 0xf5 ? 0 : c >= 0xf0 ? 4 : c >= 0xe0 ? 3 : c >= 0xc2 ? 2 : 0;   /* 0: not a lead byte */
+    *len = 1;
+    if (c < 0x80) return c;
+    if (!k) return 0xfffd;
+    cp = c & (0x7f >> k);
+    for (int j = 1; j < k; j++) {
+        if (i + j >= n || !p[j]) {               /* cut: the rest are continuation bytes */
+            *len = j;
+            return 0;
+        }
+        if ((p[j] & 0xc0) != 0x80) return 0xfffd;
+        cp = cp << 6 | (p[j] & 0x3f);
+    }
+    if ((k == 3 && cp < 0x800) || (k == 4 && (cp < 0x10000 || cp > 0x10ffff)) || (cp >= 0xd800 && cp < 0xe000)) return 0xfffd;
+    *len = k;
+    return cp;
+}
+
+/* The glyph at s[i] in UTF-8 mode: its advance, its length in *len, *which 0
+ * for the font's atlas, 1 for its Latin atlas, -1 for none, its slot in *k. */
+static int glyph_utf8(int font, const char *s, int n, int i, int *len, int *which, int *k)
+{
+    unsigned cp = utf8_at(s, n, i, len);
+    int m = !cp ? -1 : cp < 0x80 ? 0x100 + (int)cp : latin_map(cp);
+    if (m < 0) {
+        *which = -1;
+        return 0;
+    }
+    if (m >= 0x100) {
+        *which = 0;
+        *k = glyph(font, (unsigned char)(m - 0x100));
+        return fonts[font & 0xff].adv[*k];
+    }
+    *which = 1;
+    *k = m;
+    return latin[font & 0xff].adv[m];
+}
+
+UTF8 int width_utf8(int font, const char *s, int n)
+{
+    int w = 0, len, which, k;
+    for (int i = 0; i < n && s[i]; i += len) w += glyph_utf8(font, s, n, i, &len, &which, &k);
+    return w;
+}
+
+/* text_fit's cut in UTF-8 mode: the bytes of whole code points that fit in
+ * maxw with the ellipsis. */
+UTF8 int cut_utf8(int font, const char *s, int len, int ell, float maxw)
+{
+    int n = 0, w = 0, l, which, k, a;
+    while (n < len && w + (a = glyph_utf8(font, s, len, n, &l, &which, &k)) + ell <= maxw) {
+        w += a;
+        n += l;
+    }
+    return n;
+}
+
+/* wrap's measure in UTF-8 mode: the bytes of s up to its end, a '\n' or the
+ * first glyph past maxw; the last space before them in *brk, the length of
+ * the first glyph in *first. */
+UTF8 int fit_utf8(int font, const char *s, float maxw, int *brk, int *first)
+{
+    int n = 0, w = 0, len, which, k;
+    while (s[n] && s[n] != '\n') {
+        int a = glyph_utf8(font, s, 0x7fffffff, n, &len, &which, &k);
+        if (!n) *first = len;
+        if (w + a > maxw) break;
+        w += a;
+        if (s[n] == ' ') *brk = n;
+        n += len;
+    }
+    return n;
+}
+
+/* run() in UTF-8 mode, in two passes: the glyphs of the font's atlas, then
+ * those of its Latin atlas, so a line binds each atlas once. */
+UTF8 float run_utf8(float x, float y, int font, u32 color, const char *s, int n)
+{
+    const font_t *f = &fonts[font & 0xff];
+    const ui_atlas *l = &latin[font & 0xff];
+    float px = floorf(x + 0.5f);
+    for (int pass = 0; pass < 2; pass++) {
+        int cw = pass ? l->cw : f->cw, ch = pass ? l->ch : f->ch, pad = pass ? l->pad : f->pad;
+        int cols = pass ? l->cols : font_cols;
+        float top = floorf(y + 0.5f) + (pass ? l->asc - l->base : f->asc - f->base);
+        float du = (float)cw / (pass ? l->aw : f->aw), dv = (float)ch / (pass ? l->ah : f->ah);
+        px = floorf(x + 0.5f);
+        gfx_texture(pass ? &l->tex : &f->tex);
+        for (int i = 0, len, which, k; i < n && s[i]; i += len) {
+            int a = glyph_utf8(font, s, n, i, &len, &which, &k);
+            if (which == pass && s[i] != ' ') {
+                float u = (k % cols) * du, v = (k / cols) * dv;
+                float x0 = px - pad, x1 = x0 + cw, y1 = top + ch;
+                gfx_vtx *q = gfx_prim(GFX_QUADS, 4);
+                q = gfx_put(q, x0, top, color, u, v);
+                q = gfx_put(q, x1, top, color, u + du, v);
+                q = gfx_put(q, x1, y1, color, u + du, v + dv);
+                gfx_put(q, x0, y1, color, u, v + dv);
+            }
+            px += a;
+        }
+    }
+    return px;
+}
+
 /* n characters, one quad each from the font's atlas, which is bound once per
  * run; each cell lands on whole pixels. */
 static float run(float x, float y, int font, u32 color, const char *s, int n)
 {
+    if (latin) return run_utf8(x, y, font, color, s, n);
     const font_t *f = &fonts[font & 0xff];
     float px = floorf(x + 0.5f), top = floorf(y + 0.5f) + f->asc - f->base;
     float du = (float)f->cw / f->aw, dv = (float)f->ch / f->ah;
@@ -181,7 +312,9 @@ float vtext_fit(float x, float y, int font, u32 color, float maxw, const char *f
     int len = (int)strlen(s);
     if (text_w(font, s) <= maxw) return run(x, y, font, color, s, len);
     int ell = text_w(font, "..."), n = 0, w = 0;
-    while (n < len && w + adv(font, s[n]) + ell <= maxw) w += adv(font, s[n++]);
+    if (latin) n = cut_utf8(font, s, len, ell, maxw);
+    else
+        while (n < len && w + adv(font, s[n]) + ell <= maxw) w += adv(font, s[n++]);
     while (n > 0 && s[n - 1] == ' ') n--;
     return run(run(x, y, font, color, s, n), y, font, color, "...", 3);
 }
@@ -219,17 +352,19 @@ static int wrap(float x, float y, int font, u32 color, float maxw, int maxlines,
 {
     int lines = 0, step = wrap_step(font);
     while (*s && lines < maxlines) {
-        int n = 0, w = 0, brk = -1;
-        while (s[n] && s[n] != '\n') {
-            int a = adv(font, s[n]);
-            if (w + a > maxw) break;
-            w += a;
-            if (s[n] == ' ') brk = n;
-            n++;
-        }
+        int n = 0, w = 0, brk = -1, first = 1;
+        if (latin) n = fit_utf8(font, s, maxw, &brk, &first);
+        else
+            while (s[n] && s[n] != '\n') {
+                int a = adv(font, s[n]);
+                if (w + a > maxw) break;
+                w += a;
+                if (s[n] == ' ') brk = n;
+                n++;
+            }
         int take = n;
         if (s[n] && s[n] != '\n' && brk > 0) take = brk;
-        if (take == 0 && s[n] && s[n] != '\n') take = 1;      /* never stall on a too-wide character */
+        if (take == 0 && s[n] && s[n] != '\n') take = first;  /* never stall on a too-wide character */
         if (draw) run(x, y + lines * step, font, color, s, take);
         lines++;
         s += take;

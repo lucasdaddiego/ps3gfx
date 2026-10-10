@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate data/fonts.bin: the app's bitmap fonts, rendered from Inter.
+"""Generate data/fonts.bin and data/latin.bin: the app's bitmap fonts, rendered from Inter.
 
     python3 art/make_font.py <Inter[opsz,wght].ttf> [preview.png]
 
@@ -23,6 +23,17 @@ fonts.bin, big-endian (the PPU's order), read by source/ui.c:
               the left pixel in the high nibble.
 A glyph is drawn as its whole cell: the cell's left edge is the pen position
 minus the left pad, its top is the line top plus ascent minus baseline.
+
+latin.bin, the same per-font blocks for the glyphs of LATIN, read by
+source/text_utf8.c when an app calls text_utf8():
+    'PHL1', u16 font count, u16 glyph count, u16 atlas columns, u16 0,
+    u16 code point[glyph count], ascending; zero bytes to a multiple of 4;
+    then per font the block of fonts.bin (header, advances, atlas).
+LATIN is U+00A0..U+00FF, the rest of Windows-1252 (the quotes, the dashes,
+the euro, OE, S and Z with caron, Y with diaeresis ...; not the per mille
+sign, the widest glyph), the primes, the minus and a white square for code
+points the atlases do not have. U+00AD
+(the soft hyphen) is a blank cell, as 127 is in fonts.bin.
 """
 import math, os, struct, sys
 from PIL import Image, ImageDraw, ImageFont
@@ -38,17 +49,28 @@ def load(ttf, px, weight):
     f.set_variation_by_axes([min(32, max(14, px)), weight])
     return f
 
-def build(ttf, px, weight):
+LATIN = ([chr(c) for c in range(0xA0, 0x100)] + list('\u20ac\u201a\u0192\u201e\u2026\u2020\u2021\u02c6\u0160\u2039\u0152'
+         '\u017d\u2018\u2019\u201c\u201d\u2022\u2013\u2014\u02dc\u2122\u0161\u203a\u0153\u017e\u0178'
+         '\u2032\u2033\u2212\u25a1'))
+LATIN.sort()
+
+def build(ttf, px, weight, latin=False):
     f = load(ttf, px, weight)
     asc, desc = f.getmetrics()
-    # slot i draws glyph[i]; slots 0..94 are 32..126, 95 is blank, 96..105 the tabular digits
-    glyph = [chr(c) for c in range(FIRST, 127)] + [' '] + list('0123456789')
-    adv = [round(f.getlength(g)) for g in glyph]
-    off = [0] * len(glyph)
-    dmax = max(round(f.getlength(d)) for d in '0123456789')
-    for i in range(TNUM - FIRST, len(glyph)):
-        off[i] = round((dmax - f.getlength(glyph[i])) / 2)
-        adv[i] = dmax
+    if latin:                                  # slot i draws LATIN[i]; the soft hyphen is blank
+        glyph = [' ' if g == '\u00ad' else g for g in LATIN]
+        adv = [round(f.getlength(g)) for g in glyph]
+        adv[LATIN.index('\u00ad')] = 0
+        off = [0] * len(glyph)
+    else:
+        # slot i draws glyph[i]; slots 0..94 are 32..126, 95 is blank, 96..105 the tabular digits
+        glyph = [chr(c) for c in range(FIRST, 127)] + [' '] + list('0123456789')
+        adv = [round(f.getlength(g)) for g in glyph]
+        off = [0] * len(glyph)
+        dmax = max(round(f.getlength(d)) for d in '0123456789')
+        for i in range(TNUM - FIRST, len(glyph)):
+            off[i] = round((dmax - f.getlength(glyph[i])) / 2)
+            adv[i] = dmax
     left, right, top, bottom = 0, 0, -asc, desc
     for i, g in enumerate(glyph):
         x0, y0, x1, y1 = f.getbbox(g, anchor='ls')
@@ -67,8 +89,13 @@ def build(ttf, px, weight):
         d.text((x + pad + off[i], y + base), g, font=f, fill=255, anchor='ls')
     return dict(cw=cw, ch=ch, base=base, pad=pad, asc=asc, line=asc + desc, adv=adv, atlas=atlas)
 
-def pack(fonts):
-    out = bytearray(b'PHF1' + struct.pack('>HHHH', len(fonts), FIRST, LAST - FIRST + 1, COLS))
+def pack(fonts, latin=False):
+    if latin:
+        out = bytearray(b'PHL1' + struct.pack('>HHHH', len(fonts), len(LATIN), COLS, 0))
+        out += b''.join(struct.pack('>H', ord(g)) for g in LATIN)
+        out += bytes(-len(out) % 4)
+    else:
+        out = bytearray(b'PHF1' + struct.pack('>HHHH', len(fonts), FIRST, LAST - FIRST + 1, COLS))
     for ft in fonts:
         a = ft['atlas']
         out += struct.pack('>8H', ft['cw'], ft['ch'], ft['base'], ft['pad'], ft['asc'], ft['line'], a.width, a.height)
@@ -132,6 +159,14 @@ if __name__ == '__main__':
     out = os.path.join(here, '..', 'data', 'fonts.bin')
     os.makedirs(os.path.dirname(out), exist_ok=True)
     open(out, 'wb').write(data)
+    latin = [build(sys.argv[1], px, w, latin=True) for _, px, w in STYLES]
+    lout = os.path.join(here, '..', 'data', 'latin.bin')
+    open(lout, 'wb').write(pack(latin, latin=True))
+    for (name, px, w), ft in zip(STYLES, latin):
+        a = ft['atlas']
+        print(f"latin {name:6}: cell {ft['cw']}x{ft['ch']}, base {ft['base']}, ascent {ft['asc']}, atlas {a.width}x{a.height} "
+              f"({a.width * a.height * 2 // 1024} KB as A4R4G4B4)")
+    print(os.path.relpath(lout, os.path.join(here, '..')), os.path.getsize(lout), 'bytes,', len(LATIN), 'glyphs')
     fonts = unpack(data)
     for (name, px, w), ft in zip(STYLES, fonts):
         a = ft['atlas']

@@ -109,6 +109,57 @@ static void block(void)
     ui_flip();
 }
 
+/* UTF-8 after text_utf8: ASCII measures and draws as before, the fallbacks
+ * have the widths of what they draw, cuts and wraps keep whole code points */
+static void utf8(void)
+{
+    static const char *const ascii[] = {"The counter runs while the console works.", "0123 456", "a  b", ""};
+    int before[4][F_COUNT], lines[4];
+    for (int i = 0; i < 4; i++) {
+        for (int f = 0; f < F_COUNT; f++) before[i][f] = text_w(f | TNUM, ascii[i]);
+        lines[i] = text_wrap_lines(F_BODY, 300, 6, ascii[i]);
+    }
+    begin_frame();
+    footer("CROSS play  L1 previous");
+    text(MG, TOP, F_BODY, WHITE, "%s", ascii[0]);
+    ui_flip();
+    u32 v0, d0, v1, d1;
+    gfx_last_counts(&v0, &d0, NULL);
+    CHECK(text_utf8() == 0 && text_utf8() == 0);
+    begin_frame();
+    footer("CROSS play  L1 previous");
+    text(MG, TOP, F_BODY, WHITE, "%s", ascii[0]);
+    ui_flip();
+    gfx_last_counts(&v1, &d1, NULL);
+    CHECK(v0 == v1 && d0 == d1);                              /* ASCII draws as in byte mode */
+    for (int i = 0; i < 4; i++) {
+        for (int f = 0; f < F_COUNT; f++) CHECK(text_w(f | TNUM, ascii[i]) == before[i][f]);
+        CHECK(text_wrap_lines(F_BODY, 300, 6, ascii[i]) == lines[i]);
+    }
+    int sq = text_w(F_BODY, "\xe2\x96\xa1");                 /* the white square */
+    CHECK(sq > 0 && text_w(F_BODY, "\xc3\xb3") > 0 && text_w(F_BODY, "\xc3\xb3") != text_w(F_BODY, "\xc3"));
+    CHECK(text_w(F_BODY, "a\xcc\x81") == text_w(F_BODY, "a"));          /* a combining mark: no width */
+    CHECK(text_w(F_BODY, "ab\xe2\x80\x8b" "cd") == text_w(F_BODY, "abcd"));   /* zero width */
+    CHECK(text_w(F_BODY, "\xc5\x81\xc5\x99") == text_w(F_BODY, "Lr")); /* Latin Extended-A: the base letters */
+    CHECK(text_w(F_BODY, "\xc5\x92") != text_w(F_BODY, "O"));           /* OE is in the atlas */
+    CHECK(text_w(F_BODY, "\xff") == sq && text_w(F_BODY, "\xf0\x9f\x8e\xb5") == sq && text_w(F_BODY, "\xef\xbf\xbd") == sq);
+    CHECK(text_w(F_BODY, "\xc0\x80") == 2 * sq && text_w(F_BODY, "\xed\xa0\x80") == sq + 2 * sq);  /* overlong, a surrogate */
+    CHECK(text_w(F_BODY, "ab\xc3") == text_w(F_BODY, "ab") && text_w(F_BODY, "ab\xe2\x82") == text_w(F_BODY, "ab"));   /* cut at the end */
+    char big[330];
+    memset(big, 'a', 318);
+    memcpy(big + 318, "\xc3\xb3", 3);                        /* 320 bytes: the format buffer keeps 318 a and half the o */
+    CHECK(text(0, 0, F_BODY, WHITE, "%s", big) == text(0, 0, F_BODY, WHITE, "%.318s", big));
+    const char *oo = "\xc3\xb3\xc3\xb3\xc3\xb3\xc3\xb3\xc3\xb3\xc3\xb3\xc3\xb3\xc3\xb3";
+    int w1 = text_w(F_BODY, "\xc3\xb3"), ell = text_w(F_BODY, "...");
+    for (int m = 0; m <= 8 * w1 + ell; m += 3) {               /* text_fit cuts between code points */
+        float x = text_fit(0, 0, F_BODY, WHITE, (float)m, "%s", oo);
+        int k = ((int)x - ell) / w1;
+        CHECK((int)x == 8 * w1 || ((int)x - ell) % w1 == 0 || (k == 0 && (int)x == ell));
+    }
+    CHECK(text_wrap_lines(F_LARGE, 5, 4, "\xc5\x92\xc5\x92\xc5\x92") == 3);   /* too wide: one whole code point a line */
+    CHECK(text_wrap_lines(F_BODY, 2000, 4, "\xc3\xb3 \xc3\xb3\n\xc3\xb1") == 2);
+}
+
 /* the preview's offline network has PSL1GHT's socket calls and constants */
 static void net(void)
 {
@@ -162,6 +213,7 @@ int main(void)
     CHECK(st.vertices > 0 && st.draws > 0 && st.drains == 0 && st.vertices_max >= st.vertices && st.drains_sum == 0);
     ui_stats(&st, 0);
     CHECK(st.frames == 0 && st.period_max_us == 0 && st.period_us == 16667);
+    utf8();                                                 /* last: the text stays UTF-8 */
 
     if (fails) {
         printf("kitcheck: %d checks failed\n", fails);

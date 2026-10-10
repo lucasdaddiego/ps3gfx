@@ -14,15 +14,17 @@ APP=${APP:A}
 [[ -d $APP/source ]] || { print -u2 "no $APP/source"; exit 2 }
 O=$APP/tools/preview/build
 mkdir -p $O
-python3 -I - "$L/data/fonts.bin" "$O/fonts_bin.c" <<'PY'
+for bin in fonts latin; do                    # data/*.bin as C arrays, the symbols of bin2o
+python3 -I - "$L/data/$bin.bin" "$O/${bin}_bin.c" $bin <<'PY'
 import sys
-d = open(sys.argv[1], 'rb').read()
+d, n = open(sys.argv[1], 'rb').read(), sys.argv[3]
 with open(sys.argv[2], 'w') as f:
-    f.write('#include "ppu-types.h"\nconst u8 fonts_bin[] __attribute__((aligned(64))) = {\n')
+    f.write('#include "ppu-types.h"\nconst u8 %s_bin[] __attribute__((aligned(64))) = {\n' % n)
     for i in range(0, len(d), 24):
         f.write(','.join(str(b) for b in d[i:i + 24]) + ',\n')
-    f.write('};\nconst u8 fonts_bin_end[1];\nconst u32 fonts_bin_size = %d;\n' % len(d))
+    f.write('};\nconst u8 %s_bin_end[1];\nconst u32 %s_bin_size = %d;\n' % (n, n, len(d)))
 PY
+done
 CC=(cc -O2 -std=gnu11 -Wall -Wno-unused-variable -Wno-unused-parameter -Wno-incompatible-pointer-types-discards-qualifiers -Wno-macro-redefined
     -I"$L/tools/preview/stub" -I"$L/source" -I"$L/source/gfx" -I"$APP/source" ${=PV_CFLAGS:-})
 # gfx.c's API as gfx_real_*: gfx_trace.c wraps it (PV_GFXTRACE)
@@ -31,5 +33,5 @@ $CC -Dgfx_init=gfx_real_init -Dgfx_viewport=gfx_real_viewport -Dgfx_begin=gfx_re
 # (N): an app without a tools/preview/*.c of its own builds too
 $CC -o "$O/pv" "$APP"/source/*.c "$APP"/tools/preview/*.c(N) "$L"/source/*.c \
     "$L/tools/preview/stubs.c" "$L/tools/preview/gfx_soft.c" "$L/tools/preview/gfx_trace.c" "$L/tools/preview/raster.c" \
-    "$O/fonts_bin.c" "$O/gfx.o" -lm -lpthread
+    "$O/fonts_bin.c" "$O/latin_bin.c" "$O/gfx.o" -lm -lpthread
 print "built $O/pv"

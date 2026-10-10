@@ -18,7 +18,8 @@ include $(PSL1GHT)/ppu_rules
 # BUILD is the directory where object files & intermediate files will be placed
 # SOURCES is a list of directories containing source code
 # INCLUDES is a list of directories containing extra header files
-# DATA holds fonts.bin: bin2o makes it a member of the archive (fonts_bin)
+# DATA holds fonts.bin and latin.bin: bin2o makes each a member of the archive
+# (fonts_bin, latin_bin)
 #---------------------------------------------------------------------------------
 TARGET		:=	ps3gfx
 BUILD		:=	build
@@ -104,8 +105,10 @@ DEPENDS	:=	$(OFILES:.o=.d)
 #---------------------------------------------------------------------------------
 $(OUTPUT).a:	$(OFILES)
 
-# ui.c includes fonts_bin.h, which the bin2o rule writes next to fonts.bin.o
+# ui.c includes fonts_bin.h, which the bin2o rule writes next to fonts.bin.o;
+# text_utf8.c includes latin_bin.h
 ui.o: fonts.bin.o
+text_utf8.o: latin.bin.o
 
 #---------------------------------------------------------------------------------
 # This rule links in binary data with the .bin extension
