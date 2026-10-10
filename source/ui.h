@@ -8,6 +8,7 @@
 #ifndef UI_H
 #define UI_H
 
+#include <stdarg.h>
 #include <ppu-types.h>
 #include <io/pad.h>
 
@@ -84,7 +85,13 @@ float text(float x, float y, int font, u32 color, const char *fmt, ...) __attrib
 float text_r(float xr, float y, int font, u32 color, const char *fmt, ...) __attribute__((format(printf, 5, 6)));
 float text_c(float xc, float y, int font, u32 color, const char *fmt, ...) __attribute__((format(printf, 5, 6)));
 float text_fit(float x, float y, int font, u32 color, float maxw, const char *fmt, ...) __attribute__((format(printf, 6, 7)));
+/* the same with a va_list, for an app's own formatted helpers */
+float vtext(float x, float y, int font, u32 color, const char *fmt, va_list ap) __attribute__((format(printf, 5, 0)));
+float vtext_r(float xr, float y, int font, u32 color, const char *fmt, va_list ap) __attribute__((format(printf, 5, 0)));
+float vtext_c(float xc, float y, int font, u32 color, const char *fmt, va_list ap) __attribute__((format(printf, 5, 0)));
+float vtext_fit(float x, float y, int font, u32 color, float maxw, const char *fmt, va_list ap) __attribute__((format(printf, 6, 0)));
 int text_wrap(float x, float y, int font, u32 color, float maxw, int maxlines, const char *s);   /* the lines drawn */
+int text_wrap_lines(int font, float maxw, int maxlines, const char *s);   /* the lines text_wrap draws, with no draw */
 int wrap_step(int font);              /* text_wrap's line step: line_h + line_h / 6; the lines drawn times it is the height */
 int text_w(int font, const char *s);
 int line_h(int font);
@@ -124,6 +131,10 @@ void option_card(float x, float y, float w, float h, unsigned btn, int on, const
  * the caller draws the result from y + TEST_RESULT_Y. */
 #define TEST_RESULT_Y 330
 void test_card(float x, float y, float w, float h, unsigned btn, const char *title_s, const char *desc);
+/* A number field of an editor: value right-aligned in a box for digits
+ * tabular digits of font, on PANEL2, framed in WHITE when chosen. Returns the
+ * x after the box. */
+float num_field(float x, float y, int font, int value, int digits, int chosen);
 
 /* a screen */
 void begin_frame(void);
@@ -133,6 +144,7 @@ void tabs(const char *const *names, int n, int sel);                    /* pages
 void footer(const char *s);          /* "CROSS read  CIRCLE home": items apart by two spaces, buttons drawn */
 void footer_at(float x, float y, const char *s);
 void status_line(const char *msg, u32 color);
+void status_linef(u32 color, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 void ui_flip(void);
 
 /* The times of the frames that end in ui_flip, from the system clock in
@@ -155,6 +167,12 @@ void ui_stats(ui_stat *s, int reset);
 void read_pad(void);
 unsigned gesture(unsigned buttons);  /* returns the button that fired, 0 otherwise */
 int ui_leave(void);                  /* after read_pad: -1 exit (START or Quit Game), 0 home (CIRCLE), 1 stay */
+/* A held button repeats: pad_repeat returns the buttons of mask that went
+ * down this frame, and the held ones again after 350 ms, then every 30 ms (the
+ * pace of safe_calibrate). One pad_rep per group of buttons, zeroed at the
+ * start; call it once a frame, after read_pad. */
+typedef struct { s64 since, last; int on; } pad_rep;
+unsigned pad_repeat(pad_rep *r, unsigned mask);
 
 /* A blocking call in a second thread while this one draws a counter: a stopped
  * counter is the freeze signal. progress() changes the text, job_set_percent()

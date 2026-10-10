@@ -141,39 +141,43 @@ static float run(float x, float y, int font, u32 color, const char *s, int n)
     return px;
 }
 
-#define FORMAT(buf, fmt)                     \
-    char buf[320];                           \
-    do {                                     \
-        va_list ap;                          \
-        va_start(ap, fmt);                   \
-        vsnprintf(buf, sizeof buf, fmt, ap); \
-        va_end(ap);                          \
+/* The text calls format into 320 bytes: a longer text is cut at 319. */
+#define VFORMAT(buf, fmt, ap) \
+    char buf[320];            \
+    vsnprintf(buf, sizeof buf, fmt, ap)
+
+#define VCALL(r, call)       \
+    do {                     \
+        va_list ap;          \
+        va_start(ap, fmt);   \
+        r = call;            \
+        va_end(ap);          \
     } while (0)
 
-float text(float x, float y, int font, u32 color, const char *fmt, ...)
+float vtext(float x, float y, int font, u32 color, const char *fmt, va_list ap)
 {
-    FORMAT(s, fmt);
+    VFORMAT(s, fmt, ap);
     return run(x, y, font, color, s, (int)strlen(s));
 }
 
-float text_r(float xr, float y, int font, u32 color, const char *fmt, ...)
+float vtext_r(float xr, float y, int font, u32 color, const char *fmt, va_list ap)
 {
-    FORMAT(s, fmt);
+    VFORMAT(s, fmt, ap);
     float x = xr - text_w(font, s);
     run(x, y, font, color, s, (int)strlen(s));
     return x;
 }
 
-float text_c(float xc, float y, int font, u32 color, const char *fmt, ...)
+float vtext_c(float xc, float y, int font, u32 color, const char *fmt, va_list ap)
 {
-    FORMAT(s, fmt);
+    VFORMAT(s, fmt, ap);
     return run(xc - text_w(font, s) / 2, y, font, color, s, (int)strlen(s));
 }
 
 /* Cut with "..." when the text is wider than maxw. */
-float text_fit(float x, float y, int font, u32 color, float maxw, const char *fmt, ...)
+float vtext_fit(float x, float y, int font, u32 color, float maxw, const char *fmt, va_list ap)
 {
-    FORMAT(s, fmt);
+    VFORMAT(s, fmt, ap);
     int len = (int)strlen(s);
     if (text_w(font, s) <= maxw) return run(x, y, font, color, s, len);
     int ell = text_w(font, "..."), n = 0, w = 0;
@@ -182,8 +186,36 @@ float text_fit(float x, float y, int font, u32 color, float maxw, const char *fm
     return run(run(x, y, font, color, s, n), y, font, color, "...", 3);
 }
 
-/* Greedy word wrap to maxw, also at '\n'. */
-int text_wrap(float x, float y, int font, u32 color, float maxw, int maxlines, const char *s)
+float text(float x, float y, int font, u32 color, const char *fmt, ...)
+{
+    float r;
+    VCALL(r, vtext(x, y, font, color, fmt, ap));
+    return r;
+}
+
+float text_r(float xr, float y, int font, u32 color, const char *fmt, ...)
+{
+    float r;
+    VCALL(r, vtext_r(xr, y, font, color, fmt, ap));
+    return r;
+}
+
+float text_c(float xc, float y, int font, u32 color, const char *fmt, ...)
+{
+    float r;
+    VCALL(r, vtext_c(xc, y, font, color, fmt, ap));
+    return r;
+}
+
+float text_fit(float x, float y, int font, u32 color, float maxw, const char *fmt, ...)
+{
+    float r;
+    VCALL(r, vtext_fit(x, y, font, color, maxw, fmt, ap));
+    return r;
+}
+
+/* Greedy word wrap to maxw, also at '\n': the lines, drawn when draw is 1. */
+static int wrap(float x, float y, int font, u32 color, float maxw, int maxlines, const char *s, int draw)
 {
     int lines = 0, step = wrap_step(font);
     while (*s && lines < maxlines) {
@@ -198,7 +230,7 @@ int text_wrap(float x, float y, int font, u32 color, float maxw, int maxlines, c
         int take = n;
         if (s[n] && s[n] != '\n' && brk > 0) take = brk;
         if (take == 0 && s[n] && s[n] != '\n') take = 1;      /* never stall on a too-wide character */
-        run(x, y + lines * step, font, color, s, take);
+        if (draw) run(x, y + lines * step, font, color, s, take);
         lines++;
         s += take;
         while (*s == ' ') s++;
@@ -206,6 +238,13 @@ int text_wrap(float x, float y, int font, u32 color, float maxw, int maxlines, c
     }
     return lines;
 }
+
+int text_wrap(float x, float y, int font, u32 color, float maxw, int maxlines, const char *s)
+{
+    return wrap(x, y, font, color, maxw, maxlines, s, 1);
+}
+
+int text_wrap_lines(int font, float maxw, int maxlines, const char *s) { return wrap(0, 0, font, 0, maxw, maxlines, s, 0); }
 
 /* ---- drawing kit ---------------------------------------------------------- */
 
@@ -457,6 +496,17 @@ void test_card(float x, float y, float w, float h, unsigned btn, const char *tit
     rect(x + 32, y + TEST_RESULT_Y - 24, w - 64, 2, LINE);
 }
 
+/* TNUM gives every digit one advance, so the box keeps its width for every value. */
+float num_field(float x, float y, int font, int value, int digits, int chosen)
+{
+    int f = (font & 0xff) | TNUM, pad = line_h(f) / 4;
+    float w = digits * adv(f, '0') + 2 * pad, h = line_h(f) + pad;
+    round_rect(x, y, w, h, 8, PANEL2);
+    if (chosen) round_frame(x, y, w, h, 8, 3, WHITE);
+    text_r(x + w - pad, y + pad / 2, f, WHITE, "%d", value);
+    return x + w;
+}
+
 /* ---- a screen ------------------------------------------------------------- */
 
 /* No clear: the opaque background covers the whole output in every frame. */
@@ -527,8 +577,9 @@ void title(void)
 
 void title_right(const char *fmt, ...)
 {
-    FORMAT(s, fmt);
-    text_r(SW - MG, TITLE_Y + base_dy(F_TITLE, F_BODY), F_BODY, GREY, "%s", s);
+    float r;
+    VCALL(r, vtext_r(SW - MG, TITLE_Y + base_dy(F_TITLE, F_BODY), F_BODY, GREY, fmt, ap));
+    (void)r;
 }
 
 void tabs(const char *const *names, int n, int sel)
@@ -587,6 +638,13 @@ void footer_at(float x, float y, const char *s)
 }
 
 void status_line(const char *msg, u32 color) { text_fit(MG, Y_STATUS, F_BODY, color, SW - 2 * MG, "%s", msg); }
+
+void status_linef(u32 color, const char *fmt, ...)
+{
+    float r;
+    VCALL(r, vtext_fit(MG, Y_STATUS, F_BODY, color, SW - 2 * MG, fmt, ap));
+    (void)r;
+}
 
 /* ---- the visible area ----------------------------------------------------- */
 
@@ -788,6 +846,23 @@ int ui_leave(void)
 {
     if (quit || (pressed & BTN_START)) return -1;
     return (pressed & BTN_CIRCLE) ? 0 : 1;
+}
+
+/* The rule of safe_calibrate's edges: a press steps at once, a hold after
+ * 350 ms, then every 30 ms. */
+unsigned pad_repeat(pad_rep *r, unsigned mask)
+{
+    unsigned down = held & mask, went = pressed & mask;
+    s64 now = sysGetSystemTime();
+    if (went) {
+        r->since = r->last = now;
+        r->on = 1;
+        return went;
+    }
+    if (!down) r->on = 0;                    /* released: only a new press starts it again */
+    if (!r->on || now - r->since <= 350000 || now - r->last <= 30000) return 0;
+    r->last = now;
+    return down;
 }
 
 /* Two-press gestures: the first press arms, the same button fires, any other

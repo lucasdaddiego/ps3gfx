@@ -29,15 +29,16 @@ the memory layout, the source of each RSX word and the shader recipe):
 - `BTN_*`, the colours (`WHITE` to `BG_BOT`, `C_*`), the fonts `F_SMALL`, `F_BODY`, `F_MED`, `F_LARGE`, `F_TITLE`, `F_COUNT`, `TNUM`
 - the canvas: `SW`, `SH`, `MG`, `TOP`, `BOTTOM`, `Y_STATUS`, `Y_FOOTER`, `Y_NOTE`
 - the state: `quit`, `held`, `pressed`, `pad_last`, `pad_port`, `armed`, `ui_module`, `ui_demo`
-- text: `text`, `text_r`, `text_c`, `text_fit`, `text_wrap`, `wrap_step` (text_wrap's line step: the lines it
-  drew times it is the height it took), `text_w`, `line_h`, `base_dy`
+- text: `text`, `text_r`, `text_c`, `text_fit`, `vtext`, `vtext_r`, `vtext_c`, `vtext_fit` (the same with a
+  va_list), `text_wrap`, `text_wrap_lines` (the lines text_wrap draws, with no draw), `wrap_step` (text_wrap's
+  line step: the lines it drew times it is the height it took), `text_w`, `line_h`, `base_dy`
 - the kit: `rect`, `rect_v`, `round_rect`, `round_frame`, `frame`, `line`, `batch_begin`, `batch_rect`, `batch_line`, `batch_end`,
-  `ring`, `disc`, `tri`, `poly_fan`, `tex_rect` (a texture drawn into a rect), `card`, `bar`, `heading`, `button_icon`, `spinner`, `background`, `option_card`, `test_card`, `TEST_RESULT_Y`,
+  `ring`, `disc`, `tri`, `poly_fan`, `tex_rect` (a texture drawn into a rect), `card`, `bar`, `heading`, `button_icon`, `spinner`, `background`, `option_card`, `test_card`, `TEST_RESULT_Y`, `num_field` (a number box of an editor),
   `screen_origin` (the canvas position of the screen's top left corner: a 1920 x 1080 rect from it covers the
   screen, as `background` does)
-- a screen: `begin_frame`, `title`, `title_right`, `tabs`, `footer`, `footer_at`, `status_line`, `ui_flip`,
+- a screen: `begin_frame`, `title`, `title_right`, `tabs`, `footer`, `footer_at`, `status_line`, `status_linef`, `ui_flip`,
   `ui_stat`, `ui_stats` (the busy, wait and period times of the frames, and gfx's counts)
-- the pad: `read_pad`, `gesture`, `ui_leave`
+- the pad: `read_pad`, `gesture`, `ui_leave`, `pad_rep`, `pad_repeat` (a held button repeats after 350 ms, then every 30 ms)
 - a job: `job_cancel`, `progress`, `job_set_percent`, `run_job`, `run_job_cancelable` (`progress()` takes a string literal or a static buffer)
 - `first_run_prompt`
 - the visible area: `safe_l`, `safe_t`, `safe_r`, `safe_b`, `SAFE_DEF_*`, `SAFE_MIN_*`, `safe_valid`, `safe_load`, `safe_set`, `safe_apply`, `safe_override`
@@ -64,7 +65,9 @@ library builds unchanged. The additions of 2026-10-10:
 - `ui_stats` and `gfx_last_counts`: the first console numbers of the PPU's
   time per frame, for a test build;
 - `gfx_tex_new` and `tex_rect`: a texture and a picture in one call each
-  (the smoke app draws its texture with them).
+  (the smoke app draws its texture with them);
+- for editors and an app's own text helpers: `pad_repeat`, `num_field`,
+  `text_wrap_lines`, the va_list text calls and `status_linef`.
 
 ## The runtime pin
 
@@ -189,7 +192,9 @@ against the sources it previews, never against the installed copy.
   `gfx_prim`, the drains, the blocks, the viewport, the frame): `cc -std=c99 -Wall -Wextra -DGFX_VTX_BYTES=8192 -I tools/preview/stub -I source/gfx test/test_gfx.c source/gfx/gfx.c`.
 - `tools/preview/kitcheck/` (CI): an app for the host only that calls the kit
   on the preview and checks the results against the rules of the headers:
-  the gfx_block index and address, gfx_tex_new's rows, and ui_stats on the preview's clock
+  text_wrap_lines against text_wrap (5,250 cases), the va_list calls against the variadic ones (also past the
+  319-byte cut), gfx_tex_new's rows, num_field's width, the gfx_block index and address, pad_repeat's frames
+  with a held DOWN, and ui_stats on the preview's clock
   (16,667 us a frame, all of it in gfx_end). It exits 1 on a failed check.
 - `tools/preview/smoke/check_tex8.py` (CI): the smoke app draws a 4 x 4
   A8R8G8B8 texture 64 px a texel, and each texel's colour must fill its block
