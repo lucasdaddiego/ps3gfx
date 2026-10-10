@@ -50,6 +50,16 @@ typedef struct {
 
 static font_t fonts[F_COUNT];
 static int font_first = 32, font_count = 106, font_cols = 16;
+
+/* run()'s numbers per atlas slot as floats, made once by fonts_init with
+ * run()'s own expressions: the corners of the cell in the atlas and the
+ * advance. They are the same products and exact conversions of small
+ * integers, so every glyph vertex keeps its bits, and run() makes no
+ * int-to-float conversion (a store and a load on the PPU) and no division
+ * per glyph. */
+typedef struct { float u0, u1, v0, v1, adv; } glyph_t;
+static glyph_t glyphs[F_COUNT][112];
+static float font_pad[F_COUNT], font_cw[F_COUNT], font_ch[F_COUNT];
 static int text_linear = 1;
 static const ui_atlas *latin;                /* text_utf8's five Latin atlases; NULL: the text is bytes */
 static int (*latin_map)(unsigned cp);
@@ -94,6 +104,19 @@ static int fonts_init(void)
         f->tex.h = f->ah;
         f->tex.pitch = f->aw * 2;
         f->tex.linear = text_linear;
+        float du = (float)f->cw / f->aw, dv = (float)f->ch / f->ah;
+        for (int i = 0; i < font_count; i++) {
+            glyph_t *g = &glyphs[k][i];
+            float u = (i % font_cols) * du, v = (i / font_cols) * dv;   /* stored, then added: not fused, as in run() */
+            g->u0 = u;
+            g->u1 = u + du;
+            g->v0 = v;
+            g->v1 = v + dv;
+            g->adv = f->adv[i];
+        }
+        font_pad[k] = f->pad;
+        font_cw[k] = f->cw;
+        font_ch[k] = f->ch;
     }
     return 0;
 }
@@ -253,21 +276,21 @@ static float run(float x, float y, int font, u32 color, const char *s, int n)
 {
     if (latin) return run_utf8(x, y, font, color, s, n);
     const font_t *f = &fonts[font & 0xff];
+    const glyph_t *gt = glyphs[font & 0xff];
     float px = floorf(x + 0.5f), top = floorf(y + 0.5f) + f->asc - f->base;
-    float du = (float)f->cw / f->aw, dv = (float)f->ch / f->ah;
+    float pad = font_pad[font & 0xff], cw = font_cw[font & 0xff], y1 = top + font_ch[font & 0xff];
     gfx_texture(&f->tex);
     for (int i = 0; i < n; i++) {
-        int k = glyph(font, s[i]);
+        const glyph_t *g = &gt[glyph(font, s[i])];
         if (s[i] != ' ') {
-            float u = (k % font_cols) * du, v = (k / font_cols) * dv;
-            float x0 = px - f->pad, x1 = x0 + f->cw, y1 = top + f->ch;
+            float x0 = px - pad, x1 = x0 + cw;
             gfx_vtx *q = gfx_prim(GFX_QUADS, 4);
-            q = gfx_put(q, x0, top, color, u, v);
-            q = gfx_put(q, x1, top, color, u + du, v);
-            q = gfx_put(q, x1, y1, color, u + du, v + dv);
-            gfx_put(q, x0, y1, color, u, v + dv);
+            q = gfx_put(q, x0, top, color, g->u0, g->v0);
+            q = gfx_put(q, x1, top, color, g->u1, g->v0);
+            q = gfx_put(q, x1, y1, color, g->u1, g->v1);
+            gfx_put(q, x0, y1, color, g->u0, g->v1);
         }
-        px += f->adv[k];
+        px += g->adv;
     }
     return px;
 }
