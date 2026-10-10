@@ -57,6 +57,15 @@ pixel, pixel centres are at +0.5, the interpolation and the texture sampling
 are float, the alpha test compares before the 8-bit conversion, and the 8-bit
 conversions round to nearest.
 
+Against the console (Cell Bench's kit check, 2026-10-10: `ui_shot` of a fixed frame at 1080p
+against the preview's frame): the text, the shapes and an 8 x 8 texture at nearest are
+pixel-identical. Two gaps remain. The vertical background gradient is 1 level higher on the
+console on some rows: no fixed rounding rule, sample offset or fp16 step of the colour fits all
+rows (tested), so the RSX's colour interpolation has a precision of its own. And 6 pixels at the
+two ends of one thin 45-degree line differ: the line's corners come from `sqrtf` and divisions
+that ppu-gcc and the host compiler fuse differently, so its end edges lie a few ulps apart on
+the two; a coarser snap or another tie-break rule does not change them (tested).
+
 ## The renderer's back end
 
 `gfx_soft.c` is the preview's back end of `source/gfx` (the console's is
