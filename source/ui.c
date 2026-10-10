@@ -441,16 +441,69 @@ void frame(float x, float y, float w, float h, float t, u32 c)
     rect(x + w - t, y + t, t, h - 2 * t, c);
 }
 
-/* The outline of a rounded rectangle, clockwise from the top-left corner. */
+/* The kit's points on the unit circle, made once by ui_init with the angle
+ * expressions that round_pts, ring, disc and spinner computed in every
+ * frame, each kept as it was: cosf and sinf depend only on the argument, so
+ * every vertex keeps its bits, and a frame calls neither (on the console a
+ * call took about 0.37 us: 2.9 ms a frame on the kit check's shapes screen). */
+static float rp_c[2][36], rp_s[2][36];       /* round_pts: seg 4 (20 points), seg 8 (36 points) */
+static float ring_c[49], ring_s[49];
+static float disc_c[32], disc_s[32];
+static float spin_c[12], spin_s[12];
+
+/* Each angle goes through the volatile va: ppu-gcc folds cosf and sinf of a
+ * constant with MPFR (correctly rounded), and newlib's are not, so a folded
+ * entry could differ in its last bit. b reads va once, so a compiler that
+ * pairs cosf and sinf of one value (clang on macOS: __sincosf_stret) pairs
+ * them here too. */
+static void circle_tables(void)
+{
+    volatile float va;
+    float b;
+    for (int t = 0; t < 2; t++) {
+        int seg = t ? 8 : 4, n = 0;
+        for (int k = 0; k < 4; k++)
+            for (int i = 0; i <= seg; i++) {
+                float a = PI_F * (1 + k * 0.5f) + PI_F / 2 * i / seg;
+                va = a;
+                b = va;
+                rp_c[t][n] = cosf(b);
+                rp_s[t][n++] = sinf(b);
+            }
+    }
+    for (int k = 0; k <= 48; k++) {
+        float a = k * 2 * PI_F / 48;
+        va = a;
+        b = va;
+        ring_c[k] = cosf(b);
+        ring_s[k] = sinf(b);
+    }
+    for (int k = 0; k < 32; k++) {
+        va = k * 2 * PI_F / 32;
+        b = va;
+        disc_c[k] = cosf(b);
+        disc_s[k] = sinf(b);
+    }
+    for (int i = 0; i < 12; i++) {
+        float ang = i * PI_F / 6;
+        va = ang;
+        b = va;
+        spin_c[i] = cosf(b);
+        spin_s[i] = sinf(b);
+    }
+}
+
+/* The outline of a rounded rectangle, clockwise from the top-left corner;
+ * seg is 4 or 8. */
 static int round_pts(float x, float y, float w, float h, float r, int seg, float *p)
 {
     const float cx[4] = {x + r, x + w - r, x + w - r, x + r}, cy[4] = {y + r, y + r, y + h - r, y + h - r};
-    int n = 0;
+    const float *c = rp_c[seg == 8], *s = rp_s[seg == 8];
+    int n = 0, j = 0;
     for (int k = 0; k < 4; k++)
-        for (int i = 0; i <= seg; i++) {
-            float a = PI_F * (1 + k * 0.5f) + PI_F / 2 * i / seg;
-            p[n++] = cx[k] + cosf(a) * r;
-            p[n++] = cy[k] + sinf(a) * r;
+        for (int i = 0; i <= seg; i++, j++) {
+            p[n++] = cx[k] + c[j] * r;
+            p[n++] = cy[k] + s[j] * r;
         }
     return n / 2;
 }
@@ -498,7 +551,7 @@ void ring(float cx, float cy, float r, float w, u32 c)
     float ro = r + w / 2, ri = r - w / 2;
     gfx_vtx *q = shape(GFX_TRIANGLE_STRIP, 2 * 49);
     for (int k = 0; k <= 48; k++) {
-        float a = k * 2 * PI_F / 48, ca = cosf(a), sa = sinf(a);
+        float ca = ring_c[k], sa = ring_s[k];
         q = gfx_put(q, cx + ca * ro, cy + sa * ro, c, 0, 0);
         q = gfx_put(q, cx + ca * ri, cy + sa * ri, c, 0, 0);
     }
@@ -508,8 +561,8 @@ void disc(float cx, float cy, float r, u32 c)
 {
     float p[32 * 2];
     for (int k = 0; k < 32; k++) {
-        p[k * 2] = cx + cosf(k * 2 * PI_F / 32) * r;
-        p[k * 2 + 1] = cy + sinf(k * 2 * PI_F / 32) * r;
+        p[k * 2] = cx + disc_c[k] * r;
+        p[k * 2 + 1] = cy + disc_s[k] * r;
     }
     poly_fan(cx, cy, p, 32, c);
 }
@@ -598,8 +651,7 @@ void spinner(float cx, float cy, float r, double sec)
     for (int i = 0; i < 12; i++) {
         int age = (head - i + 12) % 12;
         u32 a = age > 10 ? 40 : 255 - age * 20;
-        float ang = i * PI_F / 6;
-        disc(cx + cosf(ang) * r, cy + sinf(ang) * r, r * 0.17f, (WHITE & 0xffffff00) | a);
+        disc(cx + spin_c[i] * r, cy + spin_s[i] * r, r * 0.17f, (WHITE & 0xffffff00) | a);
     }
 }
 
@@ -929,6 +981,7 @@ void safe_calibrate(int first)
 void ui_init(const ui_app *a)
 {
     app = *a;
+    circle_tables();                         /* before any kit call */
     journal_init(app.dir);
     ioPadInit(7);
     sysUtilRegisterCallback(SYSUTIL_EVENT_SLOT0, sys_callback, NULL);
