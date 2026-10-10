@@ -272,6 +272,14 @@ __attribute__((weak)) s32 netSetSockOpt(s32 s, s32 lv, s32 o, const void *v, soc
 __attribute__((weak)) ssize_t netSend(s32 s, const void *b, size_t l, s32 f) { (void)s; (void)b; (void)l; (void)f; return -1; }
 __attribute__((weak)) ssize_t netRecv(s32 s, void *b, size_t l, s32 f) { (void)s; (void)b; (void)l; (void)f; return -1; }
 __attribute__((weak)) struct net_hostent *netGetHostByName(const char *n) { (void)n; return NULL; }
+static s32 net_err = NET_ENETDOWN;
+__attribute__((weak)) s32 *netErrnoLoc(void) { return &net_err; }
+__attribute__((weak)) s32 netShutdown(s32 s, s32 h) { (void)s; (void)h; return -1; }
+__attribute__((weak)) ssize_t netRecvFrom(s32 s, void *b, size_t l, s32 f, struct sockaddr *a, socklen_t *al) { (void)s; (void)b; (void)l; (void)f; (void)a; (void)al; return -1; }
+__attribute__((weak)) ssize_t netSendTo(s32 s, const void *b, size_t l, s32 f, const struct sockaddr *a, socklen_t al) { (void)s; (void)b; (void)l; (void)f; (void)a; (void)al; return -1; }
+__attribute__((weak)) s32 netPoll(struct pollfd *p, nfds_t n, s32 t) { (void)p; (void)n; (void)t; return -1; }
+__attribute__((weak)) s32 netSelect(s32 n, fd_set *r, fd_set *w, fd_set *e, struct timeval *t) { (void)n; (void)r; (void)w; (void)e; (void)t; return -1; }
+__attribute__((weak)) s32 netGetSockOpt(s32 s, s32 lv, s32 o, void *v, socklen_t *l) { (void)s; (void)lv; (void)o; (void)v; (void)l; return -1; }
 __attribute__((weak)) s32 netCtlInit(void) { return 0; }
 __attribute__((weak)) void netCtlTerm(void) {}
 __attribute__((weak)) s32 netCtlGetInfo(s32 code, union net_ctl_info *i) { (void)code; snprintf(i->ip_address, sizeof i->ip_address, "192.168.1.20"); return 0; }

@@ -35,7 +35,11 @@ defines the strong ones in its `tools/preview/pv_app.c`. PS3 Health's
 `pv_syscall` emulates the drive from a console's sector dumps (syscall 616),
 the temperatures (383) and the fan duty (409); an app with a network screen
 defines `netSocket`, `netConnect`, `netSend` and `netRecv` for a fake peer.
-The weak list is at the end of `stubs.c`.
+The weak list is at the end of `stubs.c`: every socket call of PSL1GHT's
+`net/net.h` that a TCP or UDP client uses (also `netPoll`, `netSelect`,
+`netGetSockOpt`, `netShutdown`, `netErrnoLoc` for `net_errno`), each failing,
+and the stub headers have PSL1GHT's constants (`SO_ERROR`, `MSG_DONTWAIT`,
+`NET_EWOULDBLOCK` ...), so an app's network code compiles in the preview.
 
 ## The raster
 

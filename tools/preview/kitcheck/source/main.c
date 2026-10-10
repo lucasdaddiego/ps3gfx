@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <net/net.h>
 #include <ps3gfx/ui.h>
 #include <ps3gfx/gfx.h>
 #include <ps3gfx/fs.h>
@@ -107,12 +108,25 @@ static void block(void)
     ui_flip();
 }
 
+/* the preview's offline network has PSL1GHT's socket calls and constants */
+static void net(void)
+{
+    char b[4];
+    struct pollfd p = {0, POLLIN, 0};
+    s32 e = 0;
+    socklen_t l = sizeof e;
+    CHECK(netSocket(AF_INET, SOCK_STREAM, 0) == -1 && netRecv(0, b, 1, MSG_DONTWAIT) == -1);
+    CHECK(netPoll(&p, 1, 0) == -1 && netGetSockOpt(0, SOL_SOCKET, SO_ERROR, &e, &l) == -1 && netShutdown(0, SHUT_RDWR) == -1);
+    CHECK(net_errno == NET_ENETDOWN && NET_EWOULDBLOCK == 35 && NET_EINPROGRESS == 36);
+}
+
 int main(void)
 {
     int mk, op, wr;
     ui_init(&(const ui_app){"ps3gfx kitcheck", "0.0", DIR});
     CHECK(fs_selftest(DIR, &mk, &op, &wr) == 0);
     atexit(ui_end);
+    net();
     wrap_lines();
     va_calls();
     textures();

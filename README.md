@@ -201,7 +201,7 @@ against the sources it previews, never against the installed copy.
 - `tools/preview/kitcheck/` (CI): an app for the host only that calls the kit
   on the preview and checks the results against the rules of the headers:
   text_wrap_lines against text_wrap (5,250 cases), the va_list calls against the variadic ones (also past the
-  319-byte cut), gfx_tex_new's rows, num_field's width, the gfx_block index and address, pad_repeat's frames
+  319-byte cut), the preview's offline socket calls, gfx_tex_new's rows, num_field's width, the gfx_block index and address, pad_repeat's frames
   with a held DOWN, and ui_stats on the preview's clock
   (16,667 us a frame, all of it in gfx_end). It exits 1 on a failed check.
 - `tools/preview/smoke/check_tex8.py` (CI): the smoke app draws a 4 x 4
