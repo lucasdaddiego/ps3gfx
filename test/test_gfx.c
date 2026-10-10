@@ -1,12 +1,13 @@
 /* Host test of gfx's front end (source/gfx/gfx.c) on a back end that records
- * the draws: the batching, the vertex area and its drains, the viewport and
- * the frame. CI runs it with a small area of 409 vertices:
+ * the draws: the batching, the vertex area and its drains, the blocks, the
+ * viewport and the frame. CI runs it with a small area of 409 vertices:
  *   cc -std=c99 -Wall -Wextra -DGFX_VTX_BYTES=8192 -I tools/preview/stub -I source/gfx \
  *      test/test_gfx.c source/gfx/gfx.c */
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include "gfx.h"
 
 static int fails;
@@ -133,6 +134,53 @@ static void drain(void)
     CHECK(area_n == 409);
 }
 
+/* A block: a draw of its own from the next index that is a multiple of
+ * align / 4 vertices (32 for 128 bytes, an address on a 128-byte line here);
+ * later primitives of its type and texture join it; one that does not fit
+ * drains first; one that fits exactly does not. */
+static void block(void)
+{
+    static const gfx_tex t1 = {0x1000, 16, 16, 32, 0, GFX_TEX_A4R4G4B4};
+    reset();
+    gfx_begin();
+    gfx_texture(NULL);
+    gfx_prim(GFX_QUADS, 4);
+    CHECK(gfx_block(GFX_QUADS, 0, 128) == NULL);
+    CHECK(gfx_block(GFX_QUADS, 412, 128) == NULL);           /* more than the area */
+    CHECK(gfx_block(GFX_QUADS, 6, 128) == NULL);             /* not whole quads */
+    CHECK(gfx_block(GFX_TRIANGLES, 4, 128) == NULL);         /* not whole triangles */
+    CHECK(gfx_block(GFX_TRIANGLE_FAN, 6, 128) == NULL);
+    CHECK(gfx_block(GFX_QUADS, 4, 0) == NULL && gfx_block(GFX_QUADS, 4, 96) == NULL && gfx_block(GFX_QUADS, 4, 256) == NULL);
+    gfx_vtx *b = gfx_block(GFX_QUADS, 100, 128);
+    CHECK(b == area + 32 && ((uintptr_t)b & 127) == 0);
+    gfx_prim(GFX_QUADS, 4);                                   /* joins the block's draw */
+    gfx_texture(&t1);
+    CHECK(gfx_block(GFX_TRIANGLES, 30, 16) == area + 136);    /* 136 is a multiple of 4 */
+    CHECK(gfx_block(GFX_TRIANGLES, 3, 4) == area + 166);      /* align 4: the next index */
+    CHECK(drains == 0);
+    CHECK(gfx_block(GFX_QUADS, 300, 128) == area && drains == 1);   /* 192 + 300 > 409 */
+    gfx_prim(GFX_QUADS, 4);
+    gfx_end();
+    CHECK(nd == 5);
+    CHECK(draw_is(0, GFX_QUADS, 0, 4, NULL));
+    CHECK(draw_is(1, GFX_QUADS, 32, 104, NULL));
+    CHECK(draw_is(2, GFX_TRIANGLES, 136, 30, &t1));
+    CHECK(draw_is(3, GFX_TRIANGLES, 166, 3, &t1));
+    CHECK(draw_is(4, GFX_QUADS, 0, 304, &t1));
+    reset();
+    gfx_begin();
+    gfx_prim(GFX_QUADS, 4);
+    CHECK(gfx_block(GFX_TRIANGLES, 405, 4) == area + 4 && drains == 0);   /* 4 + 405 = the area */
+    CHECK(gfx_block(GFX_QUADS, 4, 4) == area && drains == 1);
+    gfx_end();
+    CHECK(nd == 3 && draw_is(1, GFX_TRIANGLES, 4, 405, &t1) && draw_is(2, GFX_QUADS, 0, 4, &t1));
+    reset();
+    CHECK(gfx_block(GFX_QUADS, 8, 128) == area);              /* outside a frame: dropped */
+    gfx_end();
+    CHECK(nd == 0 && drains == 0);
+    gfx_texture(NULL);
+}
+
 /* A viewport change closes the open draw; the back end gets it only inside
  * a frame, and the next frame starts with it. */
 static void viewport(void)
@@ -174,6 +222,7 @@ int main(void)
     batching();
     bounds();
     drain();
+    block();
     viewport();
     frames();
     if (fails) {

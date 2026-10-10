@@ -53,6 +53,16 @@ void gfx_texture(const gfx_tex *t);          /* for the next primitives; NULL: c
 /* Room for one primitive of n vertices (1 to GFX_PRIM_MAX); the caller
  * writes all n before its next gfx call. Outside a frame they are dropped. */
 gfx_vtx *gfx_prim(int type, int n);
+/* A block: room for n vertices (1 to the area, whole quads or triangles) of
+ * one GFX_QUADS or GFX_TRIANGLES draw, in one piece, for a writer that needs
+ * them contiguous (an SPU by DMA). The first vertex sits at a multiple of
+ * align bytes (a power of two up to 128) from the start of the area, which is
+ * on a 128-byte line. It starts a draw of its own, skips the vertices before
+ * the aligned one (never drawn), and drains first when the block does not
+ * fit. The rule of gfx_prim applies: the caller writes all n before its next
+ * gfx call. NULL when type, n or align is out of range; outside a frame they
+ * are dropped. */
+gfx_vtx *gfx_block(int type, u32 n, u32 align);
 void gfx_end(void);
 void gfx_exit(void);                         /* at exit: the RSX runs what is left (at most about 2 s) */
 

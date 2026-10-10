@@ -56,6 +56,8 @@ conversions round to nearest.
 viewport and the vertex area with its drains. The draws wait in a list until
 a drain or the end of the frame, as the RSX reads the vertices only after a
 flush; then `raster.c` draws them, and the vertices that they used become NaN.
+The vertex area starts on a 128-byte line (`posix_memalign`), as on the
+console, so the address of a `gfx_block` is aligned on both.
 A draw that reads a vertex from before the last drain draws nothing, and the
 snapshot shows it. A build with a small vertex area drains many times in
 every frame, and must give the same snapshots:
@@ -84,12 +86,14 @@ One line per call, integers in hex, floats as hex floats (`%a`, exact):
     gfx_prim 8 4                           type n, then n vertex lines:
     v 0x1.28p+5 0x1.7p+4 0xf2f5faff 0x0p+0 0x1.b6db7p-2
                                            x y rgba u v, as the app wrote them
+    gfx_block 8 38400 128                  type n align, then n vertex lines
     gfx_end
     repeat 57                              57 more frames equal to the one before
     end 7402                               the number of frames
 
 A frame is the calls up to and with `gfx_end`. The vertex lines of a
-`gfx_prim` go out at the app's next gfx call (then they are written).
+`gfx_prim` or a `gfx_block` go out at the app's next gfx call (then they are
+written).
 A `gfx_vram` from a job thread (an RSX memory test) can sit between two calls
 of a frame. A replay maps the offset of a `gfx_texture` line to the offset
 that its own `gfx_vram` gave for the same call (a layout other than the

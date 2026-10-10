@@ -80,6 +80,27 @@ gfx_vtx *gfx_prim(int type, int n)
     return area + used - n;
 }
 
+/* 20-byte vertices meet an align-byte line every align / 4 vertices (128:
+ * every 32 vertices, 640 bytes); the area starts on a 128-byte line. */
+gfx_vtx *gfx_block(int type, u32 n, u32 align)
+{
+    if (type != GFX_QUADS && type != GFX_TRIANGLES) return NULL;
+    if (!n || n > cap || n % (type == GFX_QUADS ? 4 : 3) || !align || align > 128 || (align & (align - 1))) return NULL;
+    if (!in_frame) return area;
+    u32 step = align > 4 ? align / 4 : 1, first = (used + step - 1) / step * step;
+    close_draw();
+    if (first + n > cap) {                   /* as in gfx_prim: wait until the RSX read the area, then reuse it */
+        gfx_be_drain();
+        first = 0;
+    }
+    open.type = type;
+    open.tex = tex;
+    open.first = first;
+    open.n = n;
+    used = first + n;
+    return area + first;
+}
+
 void gfx_end(void)
 {
     if (!in_frame) return;

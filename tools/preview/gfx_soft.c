@@ -70,8 +70,9 @@ int gfx_be_init(u32 vtx_bytes, gfx_vtx **out)
     gfx_w = r.width;
     gfx_h = r.height;
     u32 pitch = 4 * ((gfx_w + 15) / 16 * 16);
+    void *a = NULL;
     arena = calloc(1, LOCAL_SIZE);
-    area = malloc(vtx_bytes);
+    if (posix_memalign(&a, 128, vtx_bytes) == 0) area = a;   /* on a 128-byte line, as gfx_rsx.c's area */
     rv = malloc(vtx_bytes / sizeof(gfx_vtx) * sizeof *rv);
     if (!arena || !area || !rv) return -1;
     /* gfx_rsx.c's blocks: the two colour buffers, the two fragment programs */

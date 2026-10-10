@@ -27,7 +27,7 @@ CC=(cc -O2 -std=gnu11 -Wall -Wno-unused-variable -Wno-unused-parameter -Wno-inco
     -I"$L/tools/preview/stub" -I"$L/source" -I"$L/source/gfx" -I"$APP/source" ${=PV_CFLAGS:-})
 # gfx.c's API as gfx_real_*: gfx_trace.c wraps it (PV_GFXTRACE)
 $CC -Dgfx_init=gfx_real_init -Dgfx_viewport=gfx_real_viewport -Dgfx_begin=gfx_real_begin -Dgfx_texture=gfx_real_texture \
-    -Dgfx_prim=gfx_real_prim -Dgfx_end=gfx_real_end -c "$L/source/gfx/gfx.c" -o "$O/gfx.o"
+    -Dgfx_prim=gfx_real_prim -Dgfx_block=gfx_real_block -Dgfx_end=gfx_real_end -c "$L/source/gfx/gfx.c" -o "$O/gfx.o"
 # (N): an app without a tools/preview/*.c of its own builds too
 $CC -o "$O/pv" "$APP"/source/*.c "$APP"/tools/preview/*.c(N) "$L/source/ui.c" "$L/source/fs.c" "$L/source/journal.c" \
     "$L/tools/preview/stubs.c" "$L/tools/preview/gfx_soft.c" "$L/tools/preview/gfx_trace.c" "$L/tools/preview/raster.c" \

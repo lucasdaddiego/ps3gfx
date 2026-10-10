@@ -17,6 +17,7 @@ void gfx_real_viewport(float tx, float ty, float sx, float sy);
 void gfx_real_begin(void);
 void gfx_real_texture(const gfx_tex *t);
 gfx_vtx *gfx_real_prim(int type, int n);
+gfx_vtx *gfx_real_block(int type, u32 n, u32 align);
 void gfx_real_end(void);
 
 static FILE *tf;
@@ -24,8 +25,10 @@ static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
 static char *cur, *prev;                     /* this frame's lines, the last frame written */
 static size_t cur_n, cur_cap, prev_n, prev_cap;
 static long rep, frames, max_frames = -1;
-static const gfx_vtx *pend;                  /* the last gfx_prim, not traced yet */
-static int pend_type, pend_n;
+static const gfx_vtx *pend;                  /* the last gfx_prim or gfx_block, not traced yet */
+static int pend_type, pend_block;
+static long pend_n;
+static u32 pend_align;
 
 static void put(const char *s, size_t n)
 {
@@ -69,7 +72,8 @@ void pv_trace_line(const char *fmt, ...)
 static void flush_prim(void)                         /* the mutex is held */
 {
     if (!pend_n) return;
-    line("gfx_prim %d %d", pend_type, pend_n);
+    if (pend_block) line("gfx_block %d %ld %u", pend_type, pend_n, pend_align);
+    else line("gfx_prim %d %ld", pend_type, pend_n);
     for (int i = 0; pend && i < pend_n; i++)
         line("v %a %a 0x%08x %a %a", pend[i].x, pend[i].y, pend[i].rgba, pend[i].u, pend[i].v);
     pend_n = 0;
@@ -170,7 +174,21 @@ gfx_vtx *gfx_prim(int type, int n)
     pthread_mutex_unlock(&mu);
     gfx_vtx *p = gfx_real_prim(type, n);
     pthread_mutex_lock(&mu);
-    if (tf) pend = p, pend_type = type, pend_n = n;
+    if (tf) pend = p, pend_type = type, pend_n = n, pend_block = 0;
+    pthread_mutex_unlock(&mu);
+    return p;
+}
+
+/* A block as a gfx_prim: its line and its vertices go out at the next call. */
+gfx_vtx *gfx_block(int type, u32 n, u32 align)
+{
+    if (!tf) return gfx_real_block(type, n, align);
+    pthread_mutex_lock(&mu);
+    if (tf) flush_prim();
+    pthread_mutex_unlock(&mu);
+    gfx_vtx *p = gfx_real_block(type, n, align);
+    pthread_mutex_lock(&mu);
+    if (tf) pend = p, pend_type = type, pend_n = n, pend_block = 1, pend_align = align;
     pthread_mutex_unlock(&mu);
     return p;
 }

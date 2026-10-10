@@ -27,6 +27,15 @@ the context, the display buffers and the flip.
   z = 0 and w = 1, as for any short vertex attribute. Consecutive QUADS or
   TRIANGLES with the same texture join one draw; a strip or a fan is a draw of
   its own. A texture change binds the atlas and switches the fragment program.
+- `gfx_block(type, n, align)` gives n vertices of one QUADS or TRIANGLES draw
+  in one piece, for a writer that needs them contiguous (Cell Bench's SPUs, by
+  DMA). The first vertex sits at a multiple of align bytes (a power of two up
+  to 128) from the start of the area, which is on a 128-byte line (the IO area
+  is `memalign`ed to 1 MB): 20-byte vertices meet a 128-byte line every 32
+  vertices. The block starts a draw of its own, skips the indices before the
+  aligned one (they are never drawn), and drains first when it does not fit.
+  The caller writes all n vertices before its next gfx call, as for
+  `gfx_prim`.
 - A draw is BEGIN_END, one VB_VERTEX_BATCH per 256 vertices, BEGIN_END 0. The
   first draw after each PUT move first sends the vertex cache invalidate
   (0x1710, then 0x1714 three times).

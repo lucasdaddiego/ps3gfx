@@ -18,7 +18,8 @@ the memory layout, the source of each RSX word and the shader recipe):
 - `GFX_TRIANGLES`, `GFX_TRIANGLE_STRIP`, `GFX_TRIANGLE_FAN`, `GFX_QUADS`, `GFX_PRIM_MAX`
 - `gfx_vtx` (x, y, rgba, u, v: 20 bytes), `gfx_tex` (offset, w, h, pitch, linear, format), `GFX_TEX_A4R4G4B4`
   (0, the default: the font atlases), `GFX_TEX_A8R8G8B8`, `gfx_w`, `gfx_h`
-- `gfx_init`, `gfx_vram`, `gfx_viewport`, `gfx_begin`, `gfx_texture`, `gfx_prim`, `gfx_end`, `gfx_exit`, `gfx_put`
+- `gfx_init`, `gfx_vram`, `gfx_viewport`, `gfx_begin`, `gfx_texture`, `gfx_prim`, `gfx_block` (one draw in one
+  piece from an aligned index, for a writer such as an SPU's DMA), `gfx_end`, `gfx_exit`, `gfx_put`
 - the back end for gfx.c only: `gfx_be_init`, `gfx_be_begin`, `gfx_be_viewport`, `gfx_be_draw`, `gfx_be_drain`, `gfx_be_end`, `gfx_be_exit`
   (`gfx_rsx.c` on the console, the preview's `gfx_soft.c` on the host)
 
@@ -55,7 +56,9 @@ names: an app passes a name at each call, the table keeps its first 23
 characters (two names with the same first 23 share one state), and more
 than 64 names share the last slot. `format` is the last field of `gfx_tex`,
 so an initializer without it gets A4R4G4B4, and an app built for the first
-library builds unchanged.
+library builds unchanged. The additions of 2026-10-10: `gfx_block`, which
+replaces Cell Bench's padding quads and its 150 calls of `gfx_prim` for the
+galaxy.
 
 ## The runtime pin
 
@@ -177,7 +180,7 @@ against the sources it previews, never against the installed copy.
   a failed write, the name past the table, a name of 24 characters or more): `cc -std=c99 -Wall -Wextra -I tools/preview/stub -I source test/test_journal.c source/journal.c source/fs.c test/lv2fs_stub.c`.
 - `test/test_gfx.c`: gfx's front end (`source/gfx/gfx.c`) on a back end that
   records the draws, with an area of 409 vertices (the batching, the bounds of
-  `gfx_prim`, the drains, the viewport, the frame): `cc -std=c99 -Wall -Wextra -DGFX_VTX_BYTES=8192 -I tools/preview/stub -I source/gfx test/test_gfx.c source/gfx/gfx.c`.
+  `gfx_prim`, the drains, the blocks, the viewport, the frame): `cc -std=c99 -Wall -Wextra -DGFX_VTX_BYTES=8192 -I tools/preview/stub -I source/gfx test/test_gfx.c source/gfx/gfx.c`.
 - `tools/preview/smoke/check_tex8.py` (CI): the smoke app draws a 4 x 4
   A8R8G8B8 texture 64 px a texel, and each texel's colour must fill its block
   in the snapshot (the preview's 8-bit texture path).
