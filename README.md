@@ -98,7 +98,8 @@ smaller sizes still work there.
   `~/ps3dev` serves every app, and the last install wins.
 
 An app pins a commit, never a tag. A tag marks a console round of an app on
-the library: `v0.1.0` is 7afb1c6, PS3 Health 2.0.2's round of 2026-10-09. The history of `main` is
+the library: `v0.1.0` is 7afb1c6, PS3 Health 2.0.2's round of 2026-10-09, and `v0.2.0` is
+e4efbd9, Cell Bench 0.3.0 rc5's round of 2026-10-10. The history of `main` is
 never rewritten after a pin: a clone and a checkout of the pinned id must
 keep working.
 
@@ -197,7 +198,7 @@ the speed test, the temperatures and the fan duty under load, the
 controller, the display and the visible area, internet and LAN, the memory
 tests with XDR 194 MB and RSX 231 MB), Help with the QR code, Quit Game and
 a new start. The archive went to the console with PS3 Health 2.0.2 on
-7afb1c6 (tag `v0.1.0`, 2026-10-09). The additions of e4efbd9 went with Cell
+7afb1c6 (tag `v0.1.0`, 2026-10-09). The additions of e4efbd9 (tag `v0.2.0`) went with Cell
 Bench 0.3.0 rc5 (round 8, 2026-10-10): six SPUs write a 960 x 540
 A8R8G8B8 picture into two `gfx_vram` buffers by DMA, the frame draws it over
 the whole screen from `screen_origin` with bilinear filtering, 44 to 60
