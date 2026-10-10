@@ -67,10 +67,27 @@ static int (*latin_map)(unsigned cp);
 static unsigned rd16(const u8 *p) { return (unsigned)p[0] << 8 | p[1]; }
 static const u8 *align4(const u8 *p) { return p + (4 - (p - fonts_bin) % 4) % 4; }
 
+/* A byte of 4-bit alphas (the left pixel in the high nibble) as its two
+ * A4R4G4B4 texels, white, alpha 0 as 0, in the order they lie in memory, so
+ * that one 32-bit store writes both on the console and on the host. */
+static u32 texel_pair[256];
+
+static void texel_pairs(void)
+{
+    for (int b = 0; b < 256; b++) {
+        unsigned a0 = b >> 4, a1 = b & 15;
+        u16 t[2] = {a0 ? (u16)(a0 << 12 | 0x0fff) : 0, a1 ? (u16)(a1 << 12 | 0x0fff) : 0};
+        memcpy(&texel_pair[b], t, 4);
+    }
+}
+
+const u32 *ui_texel_pairs(void) { return texel_pair; }
+
 /* fonts.bin into RSX textures: 4-bit alpha to A4R4G4B4, white. */
 static int fonts_init(void)
 {
     const u8 *p = fonts_bin;
+    texel_pairs();
     if (fonts_bin_size < 12 || memcmp(p, "PHF1", 4)) return -1;
     int n = rd16(p + 4);
     font_first = rd16(p + 6);
@@ -92,13 +109,9 @@ static int fonts_init(void)
         memcpy(f->adv, p, font_count);
         p = align4(p + font_count);
         int npx = f->aw * f->ah;
-        u16 *t = gfx_vram(npx * 2, 128, &f->tex.offset);
+        u32 *t = gfx_vram(npx * 2, 128, &f->tex.offset);   /* npx is even: 16 columns of an even cell width */
         if (!t) return -1;
-        for (int i = 0; i < npx; i += 2) {
-            unsigned a0 = p[i / 2] >> 4, a1 = p[i / 2] & 15;
-            t[i] = a0 ? (u16)(a0 << 12 | 0x0fff) : 0;
-            t[i + 1] = a1 ? (u16)(a1 << 12 | 0x0fff) : 0;
-        }
+        for (int i = 0; i < npx / 2; i++) t[i] = texel_pair[p[i]];
         p = align4(p + npx / 2);
         f->tex.w = f->aw;
         f->tex.h = f->ah;

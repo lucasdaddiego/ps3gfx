@@ -234,6 +234,29 @@ against the sources it previews, never against the installed copy.
   the ppu job builds and installs the archive with the same `sdk_setup.sh`
   and runs the `ppu-nm` checks.
 
+## Speed on the console
+
+Cell Bench's kit check (`auto.txt` "k" in ps3tools_private's `cell-bench`) measures the kit on
+the console: the main thread's busy time per frame (`ui_stats`, 300 frames a screen) on three
+fixed screens, and a screenshot (`ui_shot`) of the first one, whose bytes must not change.
+Rounds 8 to 18 of 2026-10-10:
+
+| Screen | e63447f | circle tables | and glyph table |
+|---|---|---|---|
+| light: five fonts, the kit's shapes, a footer, a texture | 1.087 ms | 0.251 ms | 0.196 ms |
+| text: 40 more formatted lines | 1.647 ms | 0.826 ms | 0.522 ms |
+| shapes: 40 discs, 40 rings, 20 rounded rectangles | 3.988 ms | 0.378 ms | 0.331 ms |
+
+A cosf or sinf call took about 0.37 us on the PPU, so the shapes now read their points from
+tables that `ui_init` makes once, and `run()` reads each glyph's numbers from a table (no
+int-to-float conversion, a store and a load on the PPU, per glyph). Every round kept the
+screenshot's bytes. `ui_init` takes 0.4 to 0.7 s, nearly all of it in the firmware's
+`gcmInitBody` and `videoConfigure`; the font upload is 3.4 ms (6.9 ms in 16-bit stores; 64-bit
+and 16-byte stores to RSX memory were slower than 32-bit ones). The kit check also compared its
+screenshot with the preview's: the text, the shapes and the texture are pixel-identical at
+1080p; the background gradient differs by 1 level on some rows, and 6 pixels at the ends of
+one thin diagonal line differ.
+
 ## The console it ran on
 
 This code is PS3 Health 2.0.1's renderer and frame: a PS3 Super Slim

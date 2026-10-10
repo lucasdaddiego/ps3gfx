@@ -78,14 +78,11 @@ int text_utf8(void)
         if (!npx || (npx & 1) || end - p < npx / 2) return -1;
         u8 *t = gfx_tex_new(&a->tex, (u16)a->aw, (u16)a->ah, GFX_TEX_A4R4G4B4, !(gfx_w == 1920 && gfx_h == 1080));
         if (!t) return -1;
+        const u32 *pair = ui_texel_pairs();      /* two texels per 32-bit store: half the stores to RSX memory */
         for (int y = 0; y < a->ah; y++) {
-            u16 *row = (u16 *)(t + y * a->tex.pitch);
+            u32 *row = (u32 *)(t + y * a->tex.pitch);
             const u8 *src = p + y * a->aw / 2;
-            for (int x = 0; x < a->aw; x += 2) {
-                unsigned a0 = src[x / 2] >> 4, a1 = src[x / 2] & 15;
-                row[x] = a0 ? (u16)(a0 << 12 | 0x0fff) : 0;
-                row[x + 1] = a1 ? (u16)(a1 << 12 | 0x0fff) : 0;
-            }
+            for (int x = 0; x < a->aw / 2; x++) row[x] = pair[src[x]];
         }
         p = align4(p + npx / 2);
     }
