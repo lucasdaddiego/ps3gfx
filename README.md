@@ -20,6 +20,7 @@ the memory layout, the source of each RSX word and the shader recipe):
   (0, the default: the font atlases), `GFX_TEX_A8R8G8B8`, `gfx_w`, `gfx_h`
 - `gfx_init`, `gfx_vram`, `gfx_viewport`, `gfx_begin`, `gfx_texture`, `gfx_prim`, `gfx_block` (one draw in one
   piece from an aligned index, for a writer such as an SPU's DMA), `gfx_end`, `gfx_exit`, `gfx_put`
+- `gfx_last_counts` (the last frame's vertices, draws and drains)
 - the back end for gfx.c only: `gfx_be_init`, `gfx_be_begin`, `gfx_be_viewport`, `gfx_be_draw`, `gfx_be_drain`, `gfx_be_end`, `gfx_be_exit`
   (`gfx_rsx.c` on the console, the preview's `gfx_soft.c` on the host)
 
@@ -34,7 +35,8 @@ the memory layout, the source of each RSX word and the shader recipe):
   `ring`, `disc`, `tri`, `poly_fan`, `card`, `bar`, `heading`, `button_icon`, `spinner`, `background`, `option_card`, `test_card`, `TEST_RESULT_Y`,
   `screen_origin` (the canvas position of the screen's top left corner: a 1920 x 1080 rect from it covers the
   screen, as `background` does)
-- a screen: `begin_frame`, `title`, `title_right`, `tabs`, `footer`, `footer_at`, `status_line`, `ui_flip`
+- a screen: `begin_frame`, `title`, `title_right`, `tabs`, `footer`, `footer_at`, `status_line`, `ui_flip`,
+  `ui_stat`, `ui_stats` (the busy, wait and period times of the frames, and gfx's counts)
 - the pad: `read_pad`, `gesture`, `ui_leave`
 - a job: `job_cancel`, `progress`, `job_set_percent`, `run_job`, `run_job_cancelable` (`progress()` takes a string literal or a static buffer)
 - `first_run_prompt`
@@ -56,9 +58,11 @@ names: an app passes a name at each call, the table keeps its first 23
 characters (two names with the same first 23 share one state), and more
 than 64 names share the last slot. `format` is the last field of `gfx_tex`,
 so an initializer without it gets A4R4G4B4, and an app built for the first
-library builds unchanged. The additions of 2026-10-10: `gfx_block`, which
-replaces Cell Bench's padding quads and its 150 calls of `gfx_prim` for the
-galaxy.
+library builds unchanged. The additions of 2026-10-10:
+- `gfx_block`, which replaces Cell Bench's padding quads and its 150 calls
+  of `gfx_prim` for the galaxy;
+- `ui_stats` and `gfx_last_counts`: the first console numbers of the PPU's
+  time per frame, for a test build.
 
 ## The runtime pin
 
@@ -181,6 +185,10 @@ against the sources it previews, never against the installed copy.
 - `test/test_gfx.c`: gfx's front end (`source/gfx/gfx.c`) on a back end that
   records the draws, with an area of 409 vertices (the batching, the bounds of
   `gfx_prim`, the drains, the blocks, the viewport, the frame): `cc -std=c99 -Wall -Wextra -DGFX_VTX_BYTES=8192 -I tools/preview/stub -I source/gfx test/test_gfx.c source/gfx/gfx.c`.
+- `tools/preview/kitcheck/` (CI): an app for the host only that calls the kit
+  on the preview and checks the results against the rules of the headers:
+  the gfx_block index and address, and ui_stats on the preview's clock
+  (16,667 us a frame, all of it in gfx_end). It exits 1 on a failed check.
 - `tools/preview/smoke/check_tex8.py` (CI): the smoke app draws a 4 x 4
   A8R8G8B8 texture 64 px a texel, and each texel's colour must fill its block
   in the snapshot (the preview's 8-bit texture path).
@@ -192,7 +200,7 @@ against the sources it previews, never against the installed copy.
 - The RSX-word harness (outside the repository) replays recorded traces
   through `source/gfx/` on a host model of the RSX and compares the words
   with PS3 Health 2.0.1's.
-- CI (`.github/workflows/ci.yml`): the host job runs the journal and gfx tests, the
+- CI (`.github/workflows/ci.yml`): the host job runs the journal and gfx tests, the kit check, the
   script and Python checks and the smoke preview on gcc with one snapshot and its texture check;
   the ppu job builds and installs the archive with the same `sdk_setup.sh`
   and runs the `ppu-nm` checks.

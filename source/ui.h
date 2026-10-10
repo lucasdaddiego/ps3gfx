@@ -131,6 +131,23 @@ void footer_at(float x, float y, const char *s);
 void status_line(const char *msg, u32 color);
 void ui_flip(void);
 
+/* The times of the frames that end in ui_flip, from the system clock in
+ * microseconds: busy is the main thread's time from the end of one ui_flip to
+ * the gfx_end of the next (the pad, the logic, the drawing), wait the time in
+ * gfx_end (the flip and the RSX), period both. The first ui_flip has no
+ * period and is not counted. ui_stats gives the last frame, the sums and
+ * maxima since the last reset, and gfx's counts (gfx_last_counts); reset 1
+ * starts the sums and maxima again after the read. */
+typedef struct {
+    u32 frames, slow;                            /* frames since the reset; the periods over 25 ms (a missed vsync at 60 or 50 Hz) */
+    u32 busy_us, wait_us, period_us;             /* the last frame */
+    u32 busy_max_us, wait_max_us, period_max_us; /* since the reset */
+    u64 busy_sum_us, wait_sum_us;                /* since the reset: a mean is the sum / frames */
+    u32 vertices, draws, drains;                 /* the last frame's */
+    u32 vertices_max, draws_max, drains_sum;     /* since the reset */
+} ui_stat;
+void ui_stats(ui_stat *s, int reset);
+
 void read_pad(void);
 unsigned gesture(unsigned buttons);  /* returns the button that fired, 0 otherwise */
 int ui_leave(void);                  /* after read_pad: -1 exit (START or Quit Game), 0 home (CIRCLE), 1 stay */

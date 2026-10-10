@@ -14,6 +14,8 @@ static u32 cap, used;                        /* the area in vertices, and the pa
 static float vp[4] = {0, 0, 1, 1};           /* the viewport: tx, ty, sx, sy */
 static const gfx_tex *tex;                   /* the texture of the next primitives */
 static int in_frame;
+static u32 n_vtx, n_draws, n_drains;         /* this frame's counts */
+static u32 last_vtx, last_draws, last_drains;    /* the last frame's, at its gfx_end */
 
 /* The draw that the next primitives can still join. */
 static struct {
@@ -32,7 +34,11 @@ int gfx_init(void)
 /* Sends the open draw to the back end. */
 static void close_draw(void)
 {
-    if (open.n) gfx_be_draw(open.type, open.first, open.n, open.tex);
+    if (open.n) {
+        gfx_be_draw(open.type, open.first, open.n, open.tex);
+        n_vtx += open.n;
+        n_draws++;
+    }
     open.n = 0;
 }
 
@@ -67,6 +73,7 @@ gfx_vtx *gfx_prim(int type, int n)
     if (used + n > cap) {                    /* the area is full: wait until the RSX read it, then reuse it */
         close_draw();
         gfx_be_drain();
+        n_drains++;
         used = 0;
     }
     if (!open.n || open.type != type || open.tex != tex || (type != GFX_QUADS && type != GFX_TRIANGLES)) {
@@ -91,6 +98,7 @@ gfx_vtx *gfx_block(int type, u32 n, u32 align)
     close_draw();
     if (first + n > cap) {                   /* as in gfx_prim: wait until the RSX read the area, then reuse it */
         gfx_be_drain();
+        n_drains++;
         first = 0;
     }
     open.type = type;
@@ -106,7 +114,18 @@ void gfx_end(void)
     if (!in_frame) return;
     close_draw();
     in_frame = 0;
+    last_vtx = n_vtx;
+    last_draws = n_draws;
+    last_drains = n_drains;
+    n_vtx = n_draws = n_drains = 0;
     gfx_be_end();
+}
+
+void gfx_last_counts(u32 *vertices, u32 *draws, u32 *drains)
+{
+    if (vertices) *vertices = last_vtx;
+    if (draws) *draws = last_draws;
+    if (drains) *drains = last_drains;
 }
 
 /* At exit, as PSL1GHT's samples do: the RSX runs the words after the last

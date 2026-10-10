@@ -458,10 +458,42 @@ void begin_frame(void)
 /* Quit Game from the PS button menu reaches sys_callback here, in every frame,
  * also while a job runs: the job ends before the app does. gfx_end shows the
  * frame and returns when the RSX has drawn it. */
+static ui_stat st;
+static s64 st_end;                           /* the end of the last ui_flip, 0 before the first */
+
 void ui_flip(void)
 {
     sysUtilCheckCallback();
+    s64 t1 = sysGetSystemTime();
     gfx_end();
+    s64 t2 = sysGetSystemTime();
+    gfx_last_counts(&st.vertices, &st.draws, &st.drains);
+    if (st_end) {
+        st.busy_us = (u32)(t1 - st_end);
+        st.wait_us = (u32)(t2 - t1);
+        st.period_us = (u32)(t2 - st_end);
+        st.frames++;
+        if (st.period_us > 25000) st.slow++;
+        if (st.busy_us > st.busy_max_us) st.busy_max_us = st.busy_us;
+        if (st.wait_us > st.wait_max_us) st.wait_max_us = st.wait_us;
+        if (st.period_us > st.period_max_us) st.period_max_us = st.period_us;
+        st.busy_sum_us += st.busy_us;
+        st.wait_sum_us += st.wait_us;
+        if (st.vertices > st.vertices_max) st.vertices_max = st.vertices;
+        if (st.draws > st.draws_max) st.draws_max = st.draws;
+        st.drains_sum += st.drains;
+    }
+    st_end = t2;
+}
+
+void ui_stats(ui_stat *s, int reset)
+{
+    *s = st;
+    if (!reset) return;
+    st.frames = st.slow = 0;
+    st.busy_max_us = st.wait_max_us = st.period_max_us = 0;
+    st.busy_sum_us = st.wait_sum_us = 0;
+    st.vertices_max = st.draws_max = st.drains_sum = 0;
 }
 
 #define TITLE_Y 24

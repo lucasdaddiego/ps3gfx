@@ -22,7 +22,9 @@ fine), the library's `ui.c`, `fs.c` and `journal.c`, the world and `gfx.c`
 with its API renamed to `gfx_real_*` (the trace wrapper below). The sandbox
 must hold the parents of the app folder (`mkdir -p $sandbox/dev_hdd0/tmp`):
 `sysLv2FsMkdir` makes one level, as on the console. `smoke/` is the smallest
-app (one screen); CI builds it and takes one snapshot. An app keeps its own
+app (one screen); CI builds it and takes one snapshot. `kitcheck/` calls the
+kit and checks the results against the headers' rules; CI runs it and it
+exits 1 on a failed check. An app keeps its own
 run script with its scenarios (PS3 Health: `run.zsh`, `shots.zsh`).
 
 ## The app's part: pv_app.c

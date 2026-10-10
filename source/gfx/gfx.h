@@ -65,6 +65,9 @@ gfx_vtx *gfx_prim(int type, int n);
 gfx_vtx *gfx_block(int type, u32 n, u32 align);
 void gfx_end(void);
 void gfx_exit(void);                         /* at exit: the RSX runs what is left (at most about 2 s) */
+/* The last frame's counts at its gfx_end: the vertices drawn, the draws and
+ * the drains; a NULL pointer is skipped. */
+void gfx_last_counts(u32 *vertices, u32 *draws, u32 *drains);
 
 /* One vertex, and a pointer to the next. Each field is its own 4-byte store:
  * GCC 7.2 can merge plain stores into 8-byte ones, which RSX memory may not

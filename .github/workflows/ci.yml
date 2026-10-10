@@ -54,6 +54,13 @@ jobs:
           grep -q start "$t/dev_hdd0/tmp/ps3gfx_smoke/starts.txt"
           python3 -I tools/preview/smoke/check_tex8.py "$t/home.ppm"
 
+      - name: Kit check (the kit's rules on the preview)
+        run: |
+          zsh tools/preview/build.zsh APP=tools/preview/kitcheck
+          t=$(mktemp -d)
+          mkdir -p "$t/dev_hdd0/tmp"
+          PV_ROOT=$t PV_OUT=$t PV_SCRIPT="10-70:DOWN 80-82:DOWN" tools/preview/kitcheck/tools/preview/build/pv
+
   ppu:
     name: PS3 archive (Linux ps3dev bundle)
     runs-on: ubuntu-24.04   # pinned: ubuntu-latest moves to 26.04 from 2026-10-19; the bundle and libelf1t64 are checked on 24.04
