@@ -154,7 +154,8 @@ void gfx_begin(void)
 
 void gfx_texture(const gfx_tex *t)
 {
-    if (t) call("gfx_texture 0x%x 0x%x 0x%x 0x%x %d", t->offset, t->w, t->h, t->pitch, t->linear);
+    if (t && t->format) call("gfx_texture 0x%x 0x%x 0x%x 0x%x %d %d", t->offset, t->w, t->h, t->pitch, t->linear, t->format);
+    else if (t) call("gfx_texture 0x%x 0x%x 0x%x 0x%x %d", t->offset, t->w, t->h, t->pitch, t->linear);   /* A4R4G4B4: the old line, byte for byte */
     else call("gfx_texture NULL");
     gfx_real_texture(t);
 }

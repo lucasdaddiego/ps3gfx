@@ -111,9 +111,11 @@ a librsx function writes, the function is named (PSL1GHT `6e565a7`,
   floats, stride 20. Bit 31 of the VTXBUF offsets selects main memory
   (`rsxBindVertexArrayAttrib`).
 - Texture unit 0 (`rsxLoadTexture`, `rsxTextureControl`, `rsxTextureFilter`,
-  `rsxTextureWrapMode`): A4R4G4B4 with linear rows, 2D, one mipmap, clamped to
-  the edge, the ARGB remap, nearest or linear filter, border colour 0. A bind
-  first invalidates the texture cache (`rsxInvalidateTextureCache`).
+  `rsxTextureWrapMode`): A4R4G4B4 (format byte 0xa3) or A8R8G8B8 (0xa5, since
+  2026-10-09, the `format` field of `gfx_tex`), with linear rows, 2D, one
+  mipmap, clamped to the edge, the ARGB remap (the identity for both
+  formats), nearest or linear filter, border colour 0. A bind first
+  invalidates the texture cache (`rsxInvalidateTextureCache`).
 - Vertex cache: 0x1710, then 0x1714 three times (`rsxInvalidateVertexCache`).
 - Fence: SEMAPHORE_OFFSET and SEMAPHORE_BACKENDWRITE_RELEASE
   (`rsxSetWriteBackendLabel`). PSL1GHT's rsxtest sample waits on label 255

@@ -48,6 +48,11 @@ static void texel(const raster_tex *t, int x, int y, float *o)
     if (y < 0) y = 0;
     if (x >= (int)t->w) x = t->w - 1;
     if (y >= (int)t->h) y = t->h - 1;
+    if (t->format == 1) {                    /* A8R8G8B8 */
+        u32 c = *(const u32 *)(t->texels + y * t->stride + x * 4);
+        o[0] = (c >> 16 & 255) / 255.0f; o[1] = (c >> 8 & 255) / 255.0f; o[2] = (c & 255) / 255.0f; o[3] = (c >> 24 & 255) / 255.0f;
+        return;
+    }
     u16 c = *(const u16 *)(t->texels + y * t->stride + x * 2);
     o[0] = (c >> 8 & 15) / 15.0f; o[1] = (c >> 4 & 15) / 15.0f; o[2] = (c & 15) / 15.0f; o[3] = (c >> 12 & 15) / 15.0f;
 }

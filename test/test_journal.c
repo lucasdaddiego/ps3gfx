@@ -130,16 +130,19 @@ int main(void)
 
     /* 8. the table holds JOURNAL_NAMES names; the next one shares the last slot */
     fresh();
-    char name[24];
+    char name[24], last[24], before[24];
     for (int i = 0; i < JOURNAL_NAMES; i++) {
         snprintf(name, sizeof name, "n%d", i);
         CHECK(journal_state(name) == J_NONE);
     }
-    journal_skip("n32");                               /* the 33rd name: slot 31 */
-    CHECK(journal_state("n31") == J_SKIPPED);
-    CHECK(journal_state("n32") == J_SKIPPED);
-    CHECK(journal_state("n30") == J_NONE);
-    printf("the 33rd name shares slot 31: ok\n");
+    snprintf(name, sizeof name, "n%d", JOURNAL_NAMES);         /* one name more than the table */
+    snprintf(last, sizeof last, "n%d", JOURNAL_NAMES - 1);
+    snprintf(before, sizeof before, "n%d", JOURNAL_NAMES - 2);
+    journal_skip(name);
+    CHECK(journal_state(last) == J_SKIPPED);
+    CHECK(journal_state(name) == J_SKIPPED);
+    CHECK(journal_state(before) == J_NONE);
+    printf("name %d shares slot %d: ok\n", JOURNAL_NAMES + 1, JOURNAL_NAMES - 1);
 
     unlink(path);
     rmdir(dir);

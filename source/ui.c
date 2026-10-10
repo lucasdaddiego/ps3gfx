@@ -114,6 +114,7 @@ static int width_n(int font, const char *s, int n)
 
 int text_w(int font, const char *s) { return width_n(font, s, (int)strlen(s)); }
 int line_h(int font) { return fonts[font & 0xff].line; }
+int wrap_step(int font) { return line_h(font) + line_h(font) / 6; }
 int base_dy(int big, int small) { return fonts[big & 0xff].asc - fonts[small & 0xff].asc; }
 
 /* n characters, one quad each from the font's atlas, which is bound once per
@@ -184,7 +185,7 @@ float text_fit(float x, float y, int font, u32 color, float maxw, const char *fm
 /* Greedy word wrap to maxw, also at '\n'. */
 int text_wrap(float x, float y, int font, u32 color, float maxw, int maxlines, const char *s)
 {
-    int lines = 0, step = line_h(font) + line_h(font) / 6;
+    int lines = 0, step = wrap_step(font);
     while (*s && lines < maxlines) {
         int n = 0, w = 0, brk = -1;
         while (s[n] && s[n] != '\n') {
@@ -412,6 +413,12 @@ void spinner(float cx, float cy, float r, double sec)
 }
 
 void background(void) { rect_v(-org_x, -org_y, 1920, 1080, BG_TOP, BG_BOT); }
+
+void screen_origin(float *x, float *y)
+{
+    *x = (float)-org_x;
+    *y = (float)-org_y;
+}
 
 static void card_head(float x, float y, float w, unsigned btn, int on, const char *title_s, const char *desc, int lines)
 {

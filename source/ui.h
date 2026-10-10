@@ -85,6 +85,7 @@ float text_r(float xr, float y, int font, u32 color, const char *fmt, ...) __att
 float text_c(float xc, float y, int font, u32 color, const char *fmt, ...) __attribute__((format(printf, 5, 6)));
 float text_fit(float x, float y, int font, u32 color, float maxw, const char *fmt, ...) __attribute__((format(printf, 6, 7)));
 int text_wrap(float x, float y, int font, u32 color, float maxw, int maxlines, const char *s);   /* the lines drawn */
+int wrap_step(int font);              /* text_wrap's line step: line_h + line_h / 6; the lines drawn times it is the height */
 int text_w(int font, const char *s);
 int line_h(int font);
 int base_dy(int big, int small);     /* the y offset that puts a smaller font on a bigger one's baseline */
@@ -112,6 +113,7 @@ float heading(float x, float y, const char *s);                         /* a sec
 void button_icon(float cx, float cy, float size, unsigned btn);         /* a face button as on the controller */
 void spinner(float cx, float cy, float r, double sec);
 void background(void);
+void screen_origin(float *x, float *y);   /* the canvas position of the screen's top left corner: a 1920 x 1080 rect from it fills the screen */
 /* A choice: a card with its button, a title and a wrapped description. Grey when off. */
 void option_card(float x, float y, float w, float h, unsigned btn, int on, const char *title_s, const char *desc);
 /* A test: the same head with at most four lines of description, then a rule;

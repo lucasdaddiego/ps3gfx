@@ -11,8 +11,9 @@ enum { RASTER_TRIANGLES = 5, RASTER_TRIANGLE_STRIP = 6, RASTER_TRIANGLE_FAN = 7,
  * colour as 0xRRGGBBAA. */
 typedef struct { float x, y, u, v; u32 rgba; } raster_vtx;
 
-/* A texture: A4R4G4B4 texels, rows of stride bytes, clamped to the edge. */
-typedef struct { const u8 *texels; u32 w, h, stride; int linear; } raster_tex;
+/* A texture: A4R4G4B4 or (format 1) A8R8G8B8 texels in the host's byte
+ * order, as the app wrote them, rows of stride bytes, clamped to the edge. */
+typedef struct { const u8 *texels; u32 w, h, stride; int linear, format; } raster_tex;
 
 void raster_init(int w, int h);              /* a new w x h colour buffer */
 void raster_clear(u32 argb);

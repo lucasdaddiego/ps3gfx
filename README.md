@@ -16,7 +16,8 @@ host test come with it.
 `<ps3gfx/gfx.h>`, the renderer (`source/gfx/README.md` has the frame model,
 the memory layout, the source of each RSX word and the shader recipe):
 - `GFX_TRIANGLES`, `GFX_TRIANGLE_STRIP`, `GFX_TRIANGLE_FAN`, `GFX_QUADS`, `GFX_PRIM_MAX`
-- `gfx_vtx` (x, y, rgba, u, v: 20 bytes), `gfx_tex` (offset, w, h, pitch, linear), `gfx_w`, `gfx_h`
+- `gfx_vtx` (x, y, rgba, u, v: 20 bytes), `gfx_tex` (offset, w, h, pitch, linear, format), `GFX_TEX_A4R4G4B4`
+  (0, the default: the font atlases), `GFX_TEX_A8R8G8B8`, `gfx_w`, `gfx_h`
 - `gfx_init`, `gfx_vram`, `gfx_viewport`, `gfx_begin`, `gfx_texture`, `gfx_prim`, `gfx_end`, `gfx_exit`, `gfx_put`
 - the back end for gfx.c only: `gfx_be_init`, `gfx_be_begin`, `gfx_be_viewport`, `gfx_be_draw`, `gfx_be_drain`, `gfx_be_end`, `gfx_be_exit`
   (`gfx_rsx.c` on the console, the preview's `gfx_soft.c` on the host)
@@ -26,9 +27,12 @@ the memory layout, the source of each RSX word and the shader recipe):
 - `BTN_*`, the colours (`WHITE` to `BG_BOT`, `C_*`), the fonts `F_SMALL`, `F_BODY`, `F_MED`, `F_LARGE`, `F_TITLE`, `F_COUNT`, `TNUM`
 - the canvas: `SW`, `SH`, `MG`, `TOP`, `BOTTOM`, `Y_STATUS`, `Y_FOOTER`, `Y_NOTE`
 - the state: `quit`, `held`, `pressed`, `pad_last`, `pad_port`, `armed`, `ui_module`, `ui_demo`
-- text: `text`, `text_r`, `text_c`, `text_fit`, `text_wrap`, `text_w`, `line_h`, `base_dy`
+- text: `text`, `text_r`, `text_c`, `text_fit`, `text_wrap`, `wrap_step` (text_wrap's line step: the lines it
+  drew times it is the height it took), `text_w`, `line_h`, `base_dy`
 - the kit: `rect`, `rect_v`, `round_rect`, `round_frame`, `frame`, `line`, `batch_begin`, `batch_rect`, `batch_line`, `batch_end`,
-  `ring`, `disc`, `tri`, `poly_fan`, `card`, `bar`, `heading`, `button_icon`, `spinner`, `background`, `option_card`, `test_card`, `TEST_RESULT_Y`
+  `ring`, `disc`, `tri`, `poly_fan`, `card`, `bar`, `heading`, `button_icon`, `spinner`, `background`, `option_card`, `test_card`, `TEST_RESULT_Y`,
+  `screen_origin` (the canvas position of the screen's top left corner: a 1920 x 1080 rect from it covers the
+  screen, as `background` does)
 - a screen: `begin_frame`, `title`, `title_right`, `tabs`, `footer`, `footer_at`, `status_line`, `ui_flip`
 - the pad: `read_pad`, `gesture`, `ui_leave`
 - a job: `job_cancel`, `progress`, `job_set_percent`, `run_job`, `run_job_cancelable` (`progress()` takes a string literal or a static buffer)
@@ -36,16 +40,21 @@ the memory layout, the source of each RSX word and the shader recipe):
 - the visible area: `safe_l`, `safe_t`, `safe_r`, `safe_b`, `SAFE_DEF_*`, `SAFE_MIN_*`, `safe_valid`, `safe_load`, `safe_set`, `safe_apply`, `safe_override`
 
 `<ps3gfx/journal.h>`, the freeze journal (`journal.txt` in the app folder):
-- `J_NONE`, `J_PENDING`, `J_OK`, `J_BAD`, `J_FROZEN`, `J_SKIPPED`, `JOURNAL_NAMES` (32)
+- `J_NONE`, `J_PENDING`, `J_OK`, `J_BAD`, `J_FROZEN`, `J_SKIPPED`, `JOURNAL_NAMES` (64)
 - `journal_init` (called by `ui_init` with the app folder), `journal_load`, `journal_clear`, `journal_state`, `journal_skip`,
   `journal_start`, `journal_done`, `journal_needed`
 
 `<ps3gfx/fs.h>`, whole files through the `sysLv2Fs*` syscalls:
 - `fs_write_file`, `fs_read_file`, `fs_selftest(dir, &mkdir_rc, &open_rc, &write_rc)`
 
-Every name is PS3 Health's. The journal keeps a static table of 32 names of
-at most 23 characters: an app passes a name at each call, and more than 32
-names share the last slot.
+Every name is PS3 Health's, except the additions of 2026-10-09 for Cell
+Bench: the `format` field of `gfx_tex` with A8R8G8B8 (an 8-bit picture
+needs no dither), `wrap_step` and `screen_origin`, and a journal table of 64
+names (was 32: Cell Bench uses 31). The journal keeps a static table of 64
+names of at most 23 characters: an app passes a name at each call, and more
+than 64 names share the last slot. `format` is the last field of `gfx_tex`,
+so an initializer without it gets A4R4G4B4, and an app built for the first
+library builds unchanged.
 
 ## The runtime pin
 
@@ -163,7 +172,10 @@ against the sources it previews, never against the installed copy.
 - `test/test_journal.c`: the freeze journal in a temp folder against the stub
   `sys/file.h` and `test/lv2fs_stub.c` (froze at the next load, a skip
   persists, clear, compaction over 16 KB, the 32 KB tail, a done after froze,
-  a failed write, the 33rd name): `cc -std=c99 -Wall -Wextra -I tools/preview/stub -I source test/test_journal.c source/journal.c source/fs.c test/lv2fs_stub.c`.
+  a failed write, the name past the table): `cc -std=c99 -Wall -Wextra -I tools/preview/stub -I source test/test_journal.c source/journal.c source/fs.c test/lv2fs_stub.c`.
+- `tools/preview/smoke/check_tex8.py` (CI): the smoke app draws a 4 x 4
+  A8R8G8B8 texture 64 px a texel, and each texel's colour must fill its block
+  in the snapshot (the preview's 8-bit texture path).
 - `source/gfx/programs.zsh`: rebuilds the shader programs with the SDK's
   `cgcomp -a` and compares their words with `gfx_rsx.c`.
 - `ppu-nm lib/libps3gfx.a` (CI): `gfx_init`, `ui_init`, `journal_start` and
@@ -173,7 +185,7 @@ against the sources it previews, never against the installed copy.
   through `source/gfx/` on a host model of the RSX and compares the words
   with PS3 Health 2.0.1's.
 - CI (`.github/workflows/ci.yml`): the host job runs the journal test, the
-  script and Python checks and the smoke preview on gcc with one snapshot;
+  script and Python checks and the smoke preview on gcc with one snapshot and its texture check;
   the ppu job builds and installs the archive with the same `sdk_setup.sh`
   and runs the `ppu-nm` checks.
 

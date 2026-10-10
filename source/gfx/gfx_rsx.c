@@ -216,15 +216,16 @@ static void state(int b, const float *v)
     bound = NULL;                            /* the flip can turn texture unit 0 off */
 }
 
-/* Texture unit 0: A4R4G4B4, linear rows, 2D, clamped to the edge, so the RSX
- * never reads the border colour (0). */
+/* Texture unit 0: A4R4G4B4 or A8R8G8B8, linear rows, 2D, clamped to the
+ * edge, so the RSX never reads the border colour (0). The remap 0xaae4 is
+ * the ARGB identity for both formats. */
 static void bind(const gfx_tex *t)
 {
     need(13);
     w1(0x1fd8, 1);                           /* TEX_CACHE_CTL: invalidate the texture cache */
     wp[0] = 8 << 18 | 0x1a00;                /* TEX_OFFSET0 to TEX_BORDER_COLOR0 */
     wp[1] = t->offset;
-    wp[2] = 0x0001a329;                      /* format, one mipmap, local memory */
+    wp[2] = t->format == GFX_TEX_A8R8G8B8 ? 0x0001a529 : 0x0001a329;   /* format (0xa5 A8R8G8B8 or 0xa3 A4R4G4B4, | 0x20 linear rows), one mipmap, local memory */
     wp[3] = 0x00010303;                      /* wrap */
     wp[4] = 0x80000000;                      /* enable */
     wp[5] = 0x0000aae4;                      /* swizzle */

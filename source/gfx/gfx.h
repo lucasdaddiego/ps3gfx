@@ -26,12 +26,18 @@ typedef struct {
     float u, v;
 } gfx_vtx;
 
-/* An A4R4G4B4 texture in RSX memory, rows of pitch bytes, clamped to the
- * edge; linear: bilinear filtering, else nearest. gfx keeps the pointer that
- * gfx_texture gets until the frame ends, and compares textures by it. */
+/* A texture in RSX memory, rows of pitch bytes, clamped to the edge;
+ * linear: bilinear filtering, else nearest; format: A4R4G4B4 (16-bit texels
+ * 0xARGB, the font atlases') or A8R8G8B8 (32-bit 0xAARRGGBB). format is the
+ * last field, so an initializer without it gets A4R4G4B4. gfx keeps the
+ * pointer that gfx_texture gets until the frame ends, and compares textures
+ * by it. */
+#define GFX_TEX_A4R4G4B4 0
+#define GFX_TEX_A8R8G8B8 1
 typedef struct {
     u32 offset;
     u16 w, h, pitch, linear;
+    u16 format;                              /* GFX_TEX_* */
 } gfx_tex;
 
 extern int gfx_w, gfx_h;                     /* the output in pixels, set by gfx_init */

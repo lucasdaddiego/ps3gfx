@@ -128,6 +128,7 @@ static void fence(void)
             tx.h = d->t->h;
             tx.stride = d->t->pitch;
             tx.linear = d->t->linear;
+            tx.format = d->t->format;
         }
         raster_draw(d->type, rv, (int)d->n, d->t ? &tx : NULL);
     }

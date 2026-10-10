@@ -31,7 +31,7 @@ jobs:
           zsh -n tools/preview/build.zsh
           zsh -n source/gfx/programs.zsh
           zsh -n sdk_setup.sh
-          python3 -I -m py_compile art/make_font.py tools/preview/diff.py
+          python3 -I -m py_compile art/make_font.py tools/preview/diff.py tools/preview/smoke/check_tex8.py
 
       - name: Host test (the freeze journal in a temp folder)
         run: |
@@ -47,6 +47,7 @@ jobs:
           test -s "$t/home.ppm"
           head -c 2 "$t/home.ppm" | grep -q P6
           grep -q start "$t/dev_hdd0/tmp/ps3gfx_smoke/starts.txt"
+          python3 -I tools/preview/smoke/check_tex8.py "$t/home.ppm"
 
   ppu:
     name: PS3 archive (Linux ps3dev bundle)
