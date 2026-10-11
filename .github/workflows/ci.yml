@@ -48,6 +48,11 @@ jobs:
           cc -std=c99 -Wall -Wextra -DGFX_VTX_BYTES=8192 -I tools/preview/stub -I source/gfx -o test_gfx test/test_gfx.c source/gfx/gfx.c
           ./test_gfx
 
+      - name: Host test (the SPU kit's report and arguments, the local-store kernel with injected faults)
+        run: |
+          cc -std=c99 -Wall -Wextra -I source -o test_spu_kit test/test_spu_kit.c
+          ./test_spu_kit
+
       - name: Preview smoke (the world on gcc, one snapshot)
         run: |
           zsh tools/preview/build.zsh APP=tools/preview/smoke
@@ -86,8 +91,27 @@ jobs:
           ls -la lib/libps3gfx.a "$PS3DEV/portlibs/ppu/lib/libps3gfx.a" "$PS3DEV/portlibs/ppu/include/ps3gfx" "$PS3DEV/portlibs/ppu/share/ps3gfx"
           cat "$PS3DEV/portlibs/ppu/share/ps3gfx/COMMIT"
 
+      # make embeds the committed data/spu_kit.spu and needs no spu-gcc. Here
+      # the bundle's spu-gcc builds the program again: a difference fails the
+      # job, and the log then has the CI build in base64. A heap would start
+      # at _end, inside the local-store test's area: no malloc, sbrk or printf
+      # symbol, and _end at most 0x8000 keeps the area over 200 KB.
+      - name: SPU kit (spu-gcc gives the committed bytes, no heap or printf, _end at most 0x8000)
+        run: |
+          make -C spu
+          sha256sum spu/build/spu_kit.spu data/spu_kit.spu
+          cmp spu/build/spu_kit.spu data/spu_kit.spu || { echo "spu/build/spu_kit.spu differs from data/spu_kit.spu; the CI build in base64:"; base64 < spu/build/spu_kit.spu; exit 1; }
+          "$PS3DEV/spu/bin/spu-nm" spu/build/spu_kit.elf > spu_nm.txt
+          heap=$(awk '$NF ~ /malloc|sbrk|printf/ {print $NF}' spu_nm.txt | tr '\n' ' ')
+          if [ -n "$heap" ]; then echo "heap or printf symbols in the SPU program: $heap"; exit 1; fi
+          end=$(awk '$NF == "_end" {print $1}' spu_nm.txt)
+          if [ -z "$end" ] || [ $((0x$end)) -gt $((0x8000)) ]; then echo "_end 0x$end: not found or over 0x8000"; exit 1; fi
+          echo "_end 0x$end, data/spu_kit.spu $(wc -c < data/spu_kit.spu) bytes"
+
       # The four functions are D (PPC64 ELFv1: the global symbol is the
-      # function descriptor in .opd), fonts_bin and latin_bin are R. Every undefined symbol
+      # function descriptor in .opd), fonts_bin, latin_bin, spu_kit_spu and
+      # spu_kit_spu_size are R. The SPU kit's member must keep its 128-byte
+      # alignment (bin2s -a 128; bin2o gives 64). Every undefined symbol
       # that another member does not define must be PSL1GHT's or the
       # toolchain's (newlib, libsysbase): the sysLv2Fs* calls are inline
       # syscalls, never U.
@@ -95,7 +119,8 @@ jobs:
         run: |
           ppu-nm lib/libps3gfx.a > nm.txt
           for s in gfx_init ui_init journal_start text_utf8; do grep -Eq " [TD] $s\$" nm.txt || { echo "no $s in the archive"; exit 1; }; done
-          for s in fonts_bin latin_bin; do grep -Eq " R $s\$" nm.txt || { echo "no $s in the archive"; exit 1; }; done
+          for s in fonts_bin latin_bin spu_kit_spu spu_kit_spu_size; do grep -Eq " R $s\$" nm.txt || { echo "no $s in the archive"; exit 1; }; done
+          ppu-objdump -h lib/libps3gfx.a | awk '/^spu_kit\.spu\.o:/{m=1} m && $2==".rodata"{print $NF; exit}' | grep -qx '2\*\*7' || { echo "spu_kit.spu.o: .rodata is not 128-byte aligned"; exit 1; }
           awk '$1=="U"{u[$2]=1} ($2 ~ /^[TRDBC]$/){d[$3]=1} END{for(s in u) if(!(s in d)) print s}' nm.txt | sort > undefined.txt
           cat > allowed.txt <<'EOF'
           cosf

@@ -19,7 +19,9 @@ include $(PSL1GHT)/ppu_rules
 # SOURCES is a list of directories containing source code
 # INCLUDES is a list of directories containing extra header files
 # DATA holds fonts.bin and latin.bin: bin2o makes each a member of the archive
-# (fonts_bin, latin_bin)
+# (fonts_bin, latin_bin). It also holds spu_kit.spu, the SPU kit's program
+# (spu/Makefile builds it, the file is committed): the member spu_kit.spu.o,
+# from its own rule below
 #---------------------------------------------------------------------------------
 TARGET		:=	ps3gfx
 BUILD		:=	build
@@ -58,7 +60,7 @@ export BUILDDIR	:=	$(CURDIR)/$(BUILD)
 CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.bin)))
 
-export OFILES	:=	$(addsuffix .o,$(BINFILES)) $(CFILES:.c=.o)
+export OFILES	:=	$(addsuffix .o,$(BINFILES)) spu_kit.spu.o $(CFILES:.c=.o)
 
 #---------------------------------------------------------------------------------
 # build a list of include paths: the library uses nothing from $(PORTLIBS)
@@ -79,9 +81,10 @@ $(BUILD):
 clean:
 	@echo clean ...
 	@rm -fr $(BUILD) lib
+	@$(MAKE) --no-print-directory -C spu clean
 
 #---------------------------------------------------------------------------------
-# install: the archive, the four public headers as <ps3gfx/*.h>, OFL.txt (every
+# install: the archive, the five public headers as <ps3gfx/*.h>, OFL.txt (every
 # pkg that links the archive ships it as USRDIR/OFL.txt) and COMMIT, the full
 # commit id of this checkout, -dirty when tracked files changed, unknown
 # outside a git repository. An app's build.sh compares COMMIT with its pin.
@@ -89,7 +92,7 @@ clean:
 install: $(BUILD)
 	@mkdir -p $(PORTLIBS)/lib $(PORTLIBS)/include/ps3gfx $(PORTLIBS)/share/ps3gfx
 	@cp lib/lib$(TARGET).a $(PORTLIBS)/lib/
-	@cp source/gfx/gfx.h source/ui.h source/fs.h source/journal.h $(PORTLIBS)/include/ps3gfx/
+	@cp source/gfx/gfx.h source/ui.h source/fs.h source/journal.h source/spu_kit.h $(PORTLIBS)/include/ps3gfx/
 	@cp OFL.txt $(PORTLIBS)/share/ps3gfx/
 	@rev=$$(git rev-parse HEAD 2>/dev/null) && { git diff --quiet HEAD 2>/dev/null || rev=$$rev-dirty; } || rev=unknown; \
 		echo $$rev > $(PORTLIBS)/share/ps3gfx/COMMIT
@@ -117,6 +120,17 @@ text_utf8.o: latin.bin.o
 #---------------------------------------------------------------------------------
 	@echo $(notdir $<)
 	@$(bin2o)
+
+#---------------------------------------------------------------------------------
+# The SPU kit's program: bin2o's first step with a 128-byte alignment (bin2o
+# gives 64), so the SPU ELF and its load segments start on a cache line for
+# the image import, as Cell Bench's program does. No header: source/spu_kit.h
+# declares spu_kit_spu and spu_kit_spu_size. The extension .spu keeps the
+# file out of the data/*.bin rule.
+#---------------------------------------------------------------------------------
+spu_kit.spu.o	:	spu_kit.spu
+	@echo $(notdir $<)
+	@bin2s -a 128 $< | $(AS) -o $(@)
 
 -include $(DEPENDS)
 

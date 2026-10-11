@@ -9,7 +9,8 @@ counter on screen, the first-run prompt, the visible area of the TV with its
 measuring screen, and the freeze journal. An app links `libps3gfx.a`,
 includes `<ps3gfx/ui.h>` and draws its screens inside a 1920 x 1080 canvas.
 The code is PS3 Health 2.0.1's, moved here file by file; a host preview and a
-host test come with it.
+host test come with it. The SPU kit, an SPU program and its contract for the
+six SPUs of PS3 Health's tests, is here too.
 
 ## The API by header
 
@@ -59,6 +60,15 @@ the memory layout, the source of each RSX word and the shader recipe):
 - `fs_read_line`, `fs_write_line`, `fs_remove`: one-line settings files and a delete (`fs_line.c`, linked
   only by an app that calls one)
 
+`<ps3gfx/spu_kit.h>`, the SPU kit (the section "The SPU kit"): the contract of the SPU program
+`data/spu_kit.spu`, for spu-gcc, ppu-gcc and the host:
+- `SPU_KIT_SPUS`, `SPU_KIT_MAGIC`, `SPU_KIT_MARK`, `SPU_KIT_TERM_VALUE`, the modes `SPU_KIT_LS` and
+  `SPU_KIT_HEAT`, the exit statuses `SPU_KIT_EXIT_ARGS`, `SPU_KIT_EXIT_MODE`, `SPU_KIT_EXIT_LS`,
+  `SPU_KIT_EXIT_ROOM`, `SPU_KIT_HEAT_BATCH`, `SPU_KIT_LS_PASSES`, `SPU_KIT_LS_TOP`, `SPU_KIT_LS_STACK`
+- `spu_kit_arg2`, the report `spu_kit_rec`, the local-store kernel `spu_kit_ls_pass` (with
+  `spu_kit_ls_march`, `spu_kit_ls_addr` and `spu_kit_ls_got`; the accessors `SPU_KIT_RD` and `SPU_KIT_WR`)
+- `spu_kit_spu`, `spu_kit_spu_size`: the program, a member of the archive (PPU and host only)
+
 Every name is PS3 Health's, except the additions of 2026-10-09 for Cell
 Bench: the `format` field of `gfx_tex` with A8R8G8B8 (an 8-bit picture
 needs no dither), `wrap_step` and `screen_origin`, and a journal table of 64
@@ -87,6 +97,9 @@ library builds unchanged. The additions of 2026-10-10:
   other code points a white square. An app without the call keeps the byte
   text and links neither.
 
+The addition of 2026-10-11: the SPU kit (`<ps3gfx/spu_kit.h>`,
+`spu_kit_spu`), for PS3 Health's Cooling load and local-store test.
+
 ## The runtime pin
 
 The archive is built with the toolchain PS3 Health runs on: the ps3dev
@@ -112,7 +125,8 @@ The Makefile is PSL1GHT's app Makefile cut to an archive: `SOURCES := source
 source/gfx`, `DATA := data` (bin2o makes `fonts.bin` and `latin.bin` members
 of the archive with the symbols `fonts_bin`, `fonts_bin_end`, `fonts_bin_size`
 and the same for `latin_bin`; `ui.o` and `text_utf8.o` depend on them for
-their headers), and `CFLAGS = -O2 -Wall -mcpu=cell
+their headers; its own rule makes `spu_kit.spu` the member `spu_kit.spu.o`
+with `bin2s -a 128`, the SPU kit), and `CFLAGS = -O2 -Wall -mcpu=cell
 $(MACHDEP) $(INCLUDE)`, PS3 Health 2.0.1's flags, so the code is the
 console-tested one. It errors when `PSL1GHT` or `PS3DEV` is unset (ppu_rules
 would default `PS3DEV` to `/usr/local/ps3dev`). The vertex area
@@ -122,7 +136,7 @@ smaller sizes still work there.
 
 `make install` copies, into `$PS3DEV/portlibs/ppu`:
 - `lib/libps3gfx.a`;
-- `include/ps3gfx/gfx.h`, `ui.h`, `fs.h`, `journal.h`;
+- `include/ps3gfx/gfx.h`, `ui.h`, `fs.h`, `journal.h`, `spu_kit.h`;
 - `share/ps3gfx/OFL.txt`;
 - `share/ps3gfx/COMMIT`: the full commit id of the checkout, `-dirty` when
   tracked files changed, `unknown` outside a git repository. An app's
@@ -179,6 +193,106 @@ globals have short names (`text`, `line`, `title`, `quit`, `SW`, `SH`): an
 app with a global of the same name gets a duplicate-symbol link error, never
 a silent bug.
 
+## The SPU kit
+
+`spu/main.c` is an SPU program for the six SPUs of PS3 Health's tests, and
+`<ps3gfx/spu_kit.h>` is its contract. The archive embeds the stripped
+program, `data/spu_kit.spu` (committed), as the member `spu_kit.spu.o` with
+`bin2s -a 128`: the ELF starts on a 128-byte line, as Cell Bench's program
+does. Its symbols are `spu_kit_spu`, `spu_kit_spu_end` and
+`spu_kit_spu_size`.
+
+The library makes no LV2 call. The app makes each call and journals it:
+`sysSpuInitialize`, `sysSpuImageImport` of `spu_kit_spu`, the group of six
+threads, the start, the terminate or the join, the exit statuses, the
+destroy and `sysSpuImageClose`. An app that references no kit symbol links
+neither the member nor an SPU syscall. Cell Bench keeps its own program,
+with the modes 1 to 4 (echo, spin, galaxy, Mandelbrot). The kit has the
+modes 5 and 6 and the same mark, 0xce11: one family of programs.
+
+The arguments of each thread (`sysSpuThreadArgument`):
+- arg0: the EA of the thread's report, 128-byte aligned, below 4 GB
+- arg1: 0
+- arg2: `spu_kit_arg2(mode, index)`, that is mode << 32 | 0xce11 << 16 | index
+- arg3: not used (LV2 puts arg0 to arg3 into r3 to r6, and newlib's crt1
+  gives `main` only r3 to r5)
+
+The report, `spu_kit_rec`, is 128 bytes: one DMA to one cache line. Its
+first 48 bytes are Cell Bench's `cell_rec`: `magic` (`SPU_KIT_MAGIC` once
+the thread wrote it), `index`, `mode`, `sum`, the three arguments and
+`count`. The local-store test's fields follow: `done`, `lo`, `hi`, `errors`,
+`err_addr`, `err_want`, `err_got` and `ticks`. Each thread puts one report
+at its start, and the app waits for six. The app reads the reports with
+volatile reads.
+
+The modes:
+- `SPU_KIT_HEAT` (6), the Cooling load: eight independent 4-lane
+  multiply-add chains, x = x * x + c. c is -1.984375 (-127/64), exact in
+  float: spu-gcc rounds a constant toward zero, a host compiler to the
+  nearest, and both give these bits. On [c, c * c + c] = [-1.984375,
+  1.953369140625], x * x is at most c * c, so each value stays in that
+  interval and no value runs off. No chain settles: in a host simulation of
+  the SPU's arithmetic (fused, truncated toward zero), each of the 64
+  possible start values, (8 * (index & 7) + k + 1) / 64 for chain k, enters
+  a cycle of 361, 781 or 9,747 values. The eight values of a thread stay
+  different, so about 13 of the 32 bits change from one fma to the next. A
+  loop is 8 fma, an add and a branch, so the float pipeline works 8 cycles
+  in 9 (an estimate: about 355 million loops a second per SPU). A report
+  every 2^20 loops (`SPU_KIT_HEAT_BATCH`) has `count`, the loops so far, and
+  `sum`, a fold of the chains. The mode never exits. The app ends the group
+  with `sysSpuThreadGroupTerminate(group, SPU_KIT_TERM_VALUE)`, and the join
+  gives the cause 4 (`SPU_THREAD_GROUP_JOIN_TERMINATED`) and the status
+  0x5ed. The app watches `count`: a count that stops moving is a stopped
+  SPU.
+- `SPU_KIT_LS` (5), the local-store test: the area [lo, hi) of the thread's
+  own 256 KB local store. lo is the end of the image rounded up to 128, and
+  hi is 0x3c000: the top 16 KB stay for the stack. In this build the area is
+  0x1980 to 0x3c000, 239,232 bytes (91 % of the local store). The test makes
+  16 passes (`SPU_KIT_LS_PASSES`). A pass is March C- (up w0; up r0 w1; up
+  r1 w0; down r0 w1; down r1 w0; up r0) on the background 0x00000000, then
+  on 0x55555555, then a write and a read of each word's own address XOR a
+  constant of the pass. `errors` counts the wrong reads and saturates. The
+  first wrong read goes into `err_addr` (its local-store address),
+  `err_want` and `err_got`. A report follows each pass (`count`: the passes
+  done), then a last one with `ticks` (decrementer ticks: the timebase, 79.8
+  MHz) and `done` = 1. The time is an estimate: about 21 million word steps
+  per SPU, 0.05 to 0.2 s. The kernel, `spu_kit_ls_pass`, is plain C in the
+  header: an app's preview twin runs it over a host buffer with addr0 = lo
+  and reports the same addresses.
+
+The exit statuses (`sysSpuThreadGetExitStatus`, after the join):
+
+| Status | When |
+|---|---|
+| 0x200, `SPU_KIT_EXIT_ARGS` | the mark or arg0 is wrong: no DMA |
+| 0x300, `SPU_KIT_EXIT_MODE` | an unknown mode: no DMA |
+| 0x500 \| index, `SPU_KIT_EXIT_LS` | the local-store test ran: the result is in the report |
+| 0x600 \| index, `SPU_KIT_EXIT_ROOM` | the area is under 4 KB or the stack reaches it: the report has `done` = 1, `lo` and `hi`, and the area was not written |
+
+The thread exit is Cell Bench's: the status into the outbound mailbox, then
+stop 0x102. newlib's `exit` and `_exit` (a stop 0x2000 with the status,
+libspe2's code) are linked and never reached.
+
+`make -C spu` makes `spu/build/spu_kit.elf` and the stripped
+`spu/build/spu_kit.spu` with the bundle's `spu-gcc` and `spu-strip`
+(`$(PS3DEV)/spu/bin`, Cell Bench's flags without `-lm`: newlib's startup
+files and C library, no SPU library, no heap, no printf).
+`make -C spu update` copies the program to `data/spu_kit.spu`, the
+committed copy: `make`, `make install` and an app's `sdk_setup.sh` need no
+`spu-gcc`. The linker
+writes the `-o` path into `.note.spu_name`, and `spu-strip` keeps it: the
+relative `-o build/spu_kit.elf` gives the same bytes in every checkout. The
+extension `.spu` keeps the file out of the `data/*.bin` rule, which aligns
+to 64 bytes. CI builds the program again and compares the bytes with
+`data/spu_kit.spu`. It also checks that no malloc, sbrk or printf symbol is
+linked (a heap would start at `_end`, inside the area) and that `_end` is
+at most 0x8000.
+
+This build (spu-gcc 7.2.0): text 5,240 bytes, data 800, bss 272, `_end`
+0x1910, `data/spu_kit.spu` 7,048 bytes. Stack frames (`-fstack-usage`):
+heat 320 bytes, ls 496, main 80. No console has run the kit yet: PS3 Health
+2.1.0 rc1 is its first round.
+
 ## The preview on the host
 
 `tools/preview/` compiles an app on the frame for the Mac or Linux against
@@ -197,7 +311,7 @@ weak symbols: an app's `tools/preview/pv_app.c` defines the strong
 end, the gfx traces (`PV_GFXTRACE`), `diff.py` and the pad scripts.
 `tools/preview/smoke/` is the smallest app, for CI. On the host an app
 includes `<ps3gfx/ui.h>` as on the console: `tools/preview/stub/ps3gfx/`
-holds four forwarders to the checkout's own headers, so the preview builds
+holds five forwarders to the checkout's own headers, so the preview builds
 against the sources it previews, never against the installed copy.
 
 ## Tests
@@ -213,6 +327,15 @@ against the sources it previews, never against the installed copy.
 - `test/test_gfx.c`: gfx's front end (`source/gfx/gfx.c`) on a back end that
   records the draws, with an area of 409 vertices (the batching, the bounds of
   `gfx_prim`, the drains, the blocks, the viewport, the frame, the submit and the wait): `cc -std=c99 -Wall -Wextra -DGFX_VTX_BYTES=8192 -I tools/preview/stub -I source/gfx test/test_gfx.c source/gfx/gfx.c`.
+- `test/test_spu_kit.c`: the SPU kit's contract (the report's size, alignment
+  and layout, the arg2 packing) and its local-store kernel over a buffer of
+  the SPU's area size, 16 passes: a clean area gives no error, and injected
+  faults (stuck-at 0 and 1, a transition, three couplings, an alias, a
+  bridge, a pattern fault) are each found at their first address with the
+  word written and the word read. Four of them need one part of a pass each:
+  the down marches, the last up read, the background 0x55555555, the address
+  pass. Also the saturating count and no write outside the area:
+  `cc -std=c99 -Wall -Wextra -I source test/test_spu_kit.c`.
 - `tools/preview/kitcheck/` (CI): an app for the host only that calls the kit
   on the preview and checks the results against the rules of the headers:
   text_wrap_lines against text_wrap (5,250 cases), the va_list calls against the variadic ones (also past the
@@ -227,16 +350,21 @@ against the sources it previews, never against the installed copy.
   in the snapshot (the preview's 8-bit texture path).
 - `source/gfx/programs.zsh`: rebuilds the shader programs with the SDK's
   `cgcomp -a` and compares their words with `gfx_rsx.c`.
-- `ppu-nm lib/libps3gfx.a` (CI): `gfx_init`, `ui_init`, `journal_start` and
-  `fonts_bin` are there, and no undefined symbol is outside PSL1GHT and the
-  toolchain's newlib (the `sysLv2Fs*` calls are inline syscalls).
+- `ppu-nm lib/libps3gfx.a` (CI): `gfx_init`, `ui_init`, `journal_start`,
+  `fonts_bin` and `spu_kit_spu` are there, the kit's member is 128-byte
+  aligned (`ppu-objdump -h`), and no undefined symbol is outside PSL1GHT and
+  the toolchain's newlib (the `sysLv2Fs*` calls are inline syscalls).
+- The SPU kit's program (CI): the bundle's `spu-gcc` builds it again and the
+  bytes must be `data/spu_kit.spu`; `spu-nm` finds no malloc, sbrk or printf
+  symbol and `_end` at most 0x8000.
 - The RSX-word harness (outside the repository) replays recorded traces
   through `source/gfx/` on a host model of the RSX and compares the words
   with PS3 Health 2.0.1's.
-- CI (`.github/workflows/ci.yml`): the host job runs the journal, file and gfx tests, the kit check, the
+- CI (`.github/workflows/ci.yml`): the host job runs the journal, file, gfx and SPU kit tests, the kit check, the
   script and Python checks and the smoke preview on gcc with one snapshot and its texture check;
-  the ppu job builds and installs the archive with the same `sdk_setup.sh`
-  and runs the `ppu-nm` checks.
+  the ppu job builds and installs the archive with the same `sdk_setup.sh`,
+  builds the SPU kit's program again and compares it with the committed one,
+  and runs the `spu-nm` and `ppu-nm` checks.
 
 ## Speed on the console
 
