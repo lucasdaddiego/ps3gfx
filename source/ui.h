@@ -156,17 +156,30 @@ void footer_at(float x, float y, const char *s);
 void status_line(const char *msg, u32 color);
 void status_linef(u32 color, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 void ui_flip(void);
+/* The frame ends as in ui_flip, but ui_submit returns at once: the app can
+ * compute (the next frame's logic) while the RSX draws and the TV waits for
+ * its vsync. The next begin_frame (or ui_wait, or ui_flip) waits for the
+ * frame. Until then, write no vertex of the frame and no texel of a texture
+ * it drew (gfx_submit in gfx.h). */
+void ui_submit(void);
+/* The wait for a ui_submit frame now, with its times (ui_stats): an app calls
+ * it before it writes a vertex or a texel that the frame reads. begin_frame
+ * and ui_shot call it. It returns at once when no frame waits. */
+void ui_wait(void);
 
 /* A screenshot: the colour buffer on the TV (gfx_front) as a binary PPM at
- * path. Call it between ui_flip and the next begin_frame. The app stops for
+ * path. Call it between ui_flip (or ui_submit: it waits for that frame
+ * first) and the next begin_frame. The app stops for
  * about 1.4 s at 1080p (0.6 s at 720p): the reads of RSX memory and the file.
  * 0, or the LV2 rc (-1: no buffer or no memory for the rows). */
 int ui_shot(const char *path);
 
-/* The times of the frames that end in ui_flip, from the system clock in
- * microseconds: busy is the main thread's time from the end of one ui_flip to
- * the gfx_end of the next (the pad, the logic, the drawing), wait the time in
- * gfx_end (the flip and the RSX), period both. The first ui_flip has no
+/* The times of the frames, from the system clock in microseconds. A frame
+ * ends when its wait returns: in ui_flip, or after a ui_submit in ui_wait
+ * (begin_frame and ui_shot call it) or ui_flip. busy is the main thread's time from the end of
+ * one frame to the wait of the next (the pad, the logic, the drawing, and
+ * after a ui_submit the work before the next begin_frame), wait the time in
+ * that wait (the flip and the RSX), period both. The first frame has no
  * period and is not counted. ui_stats gives the last frame, the sums and
  * maxima since the last reset, and gfx's counts (gfx_last_counts); reset 1
  * starts the sums and maxima again after the read. */

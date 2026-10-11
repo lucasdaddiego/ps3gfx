@@ -19,10 +19,12 @@ the memory layout, the source of each RSX word and the shader recipe):
 - `gfx_vtx` (x, y, rgba, u, v: 20 bytes), `gfx_tex` (offset, w, h, pitch, linear, format), `GFX_TEX_A4R4G4B4`
   (0, the default: the font atlases), `GFX_TEX_A8R8G8B8`, `gfx_w`, `gfx_h`
 - `gfx_init`, `gfx_vram`, `gfx_tex_new` (a texture in that memory, rows rounded up to 64 bytes), `gfx_viewport`, `gfx_begin`, `gfx_texture`, `gfx_prim`, `gfx_block` (one draw in one
-  piece from an aligned index, for a writer such as an SPU's DMA), `gfx_end`, `gfx_exit`, `gfx_put`
+  piece from an aligned index, for a writer such as an SPU's DMA), `gfx_end`, `gfx_submit` and `gfx_wait` (`gfx_end` in
+  two halves: the app computes while the RSX draws), `gfx_exit`, `gfx_put`
 - `gfx_last_counts` (the last frame's vertices, draws and drains), `gfx_front` (the colour buffer on the TV,
   between frames)
-- the back end for gfx.c only: `gfx_be_init`, `gfx_be_begin`, `gfx_be_viewport`, `gfx_be_draw`, `gfx_be_drain`, `gfx_be_end`, `gfx_be_exit`
+- the back end for gfx.c only: `gfx_be_init`, `gfx_be_begin`, `gfx_be_viewport`, `gfx_be_draw`, `gfx_be_drain`, `gfx_be_submit`,
+  `gfx_be_wait`, `gfx_be_exit`
   (`gfx_rsx.c` on the console, the preview's `gfx_soft.c` on the host)
 
 `<ps3gfx/ui.h>`, the frame:
@@ -39,6 +41,7 @@ the memory layout, the source of each RSX word and the shader recipe):
   `screen_origin` (the canvas position of the screen's top left corner: a 1920 x 1080 rect from it covers the
   screen, as `background` does)
 - a screen: `begin_frame`, `title`, `title_right`, `tabs`, `footer`, `footer_at`, `status_line`, `status_linef`, `ui_flip`,
+  `ui_submit` (`ui_flip` without the wait: the next `begin_frame` waits), `ui_wait` (that wait now),
   `ui_stat`, `ui_stats` (the busy, wait and period times of the frames, and gfx's counts), `ui_shot` (the
   TV picture as a PPM, `shot.c`)
 - the pad: `read_pad`, `gesture`, `ui_leave`, `pad_rep`, `pad_repeat` (a held button repeats after 350 ms, then every 30 ms)
@@ -209,7 +212,7 @@ against the sources it previews, never against the installed copy.
   `cc -std=c99 -Wall -Wextra -I tools/preview/stub -I source test/test_fs.c source/fs_line.c source/fs.c test/lv2fs_stub.c`.
 - `test/test_gfx.c`: gfx's front end (`source/gfx/gfx.c`) on a back end that
   records the draws, with an area of 409 vertices (the batching, the bounds of
-  `gfx_prim`, the drains, the blocks, the viewport, the frame): `cc -std=c99 -Wall -Wextra -DGFX_VTX_BYTES=8192 -I tools/preview/stub -I source/gfx test/test_gfx.c source/gfx/gfx.c`.
+  `gfx_prim`, the drains, the blocks, the viewport, the frame, the submit and the wait): `cc -std=c99 -Wall -Wextra -DGFX_VTX_BYTES=8192 -I tools/preview/stub -I source/gfx test/test_gfx.c source/gfx/gfx.c`.
 - `tools/preview/kitcheck/` (CI): an app for the host only that calls the kit
   on the preview and checks the results against the rules of the headers:
   text_wrap_lines against text_wrap (5,250 cases), the va_list calls against the variadic ones (also past the
@@ -217,7 +220,8 @@ against the sources it previews, never against the installed copy.
   with a held DOWN, ui_shot against the preview's own snapshot of the frame (CI compares the two files),
   ui_stats on the preview's clock, and after text_utf8: ASCII measures and draws as before, the fallbacks,
   the cut sequences and the text_fit and text_wrap breaks on whole code points
-  (16,667 us a frame, all of it in gfx_end). It exits 1 on a failed check.
+  (16,667 us a frame, all of it in gfx_end; with ui_submit all of it busy, counted in the next begin_frame).
+  It exits 1 on a failed check.
 - `tools/preview/smoke/check_tex8.py` (CI): the smoke app draws a 4 x 4
   A8R8G8B8 texture 64 px a texel, and each texel's colour must fill its block
   in the snapshot (the preview's 8-bit texture path).

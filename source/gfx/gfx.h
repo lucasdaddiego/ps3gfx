@@ -1,6 +1,7 @@
 /* gfx: the app's 2D renderer (README.md in this folder). A frame is
  * gfx_begin, then primitives, then gfx_end, which shows the frame and returns
- * when the RSX has drawn it. Positions are canvas units that gfx_viewport
+ * when the RSX has drawn it, or gfx_submit, which returns at once, and
+ * gfx_wait later. Positions are canvas units that gfx_viewport
  * maps to output pixels. gfx.c is the portable front end (batching, the
  * viewport, the vertex area); a back end draws: gfx_rsx.c on the console,
  * the preview's gfx_soft.c on the host. Plain C types only, so the preview
@@ -69,14 +70,24 @@ gfx_vtx *gfx_prim(int type, int n);
  * gfx call. NULL when type, n or align is out of range; outside a frame they
  * are dropped. */
 gfx_vtx *gfx_block(int type, u32 n, u32 align);
+/* gfx_submit ends the frame: the RSX gets its draws, the flip and the wait
+ * for it, and gfx_submit returns at once, so the app can compute (the next
+ * frame's logic) while the RSX draws and the TV waits for its vsync.
+ * gfx_wait returns when that frame is on the TV and the RSX has read every
+ * vertex; at once when no frame waits. Until gfx_wait returns, the frame's
+ * vertices and the texels of every texture it drew are still read: write
+ * neither. gfx_begin, and gfx_prim and gfx_block outside a frame, call
+ * gfx_wait first. gfx_end is gfx_submit, then gfx_wait. */
+void gfx_submit(void);
+void gfx_wait(void);
 void gfx_end(void);
 void gfx_exit(void);                         /* at exit: the RSX runs what is left (at most about 2 s) */
-/* The colour buffer on the TV, between a gfx_end and the next gfx_begin:
+/* The colour buffer on the TV, between a gfx_end (or a gfx_wait) and the next gfx_begin:
  * gfx_h rows of *pitch bytes, gfx_w words 0x??RRGGBB each (the top byte is
  * not alpha). It is RSX memory: about 0.5 us a read. NULL before gfx_init. */
 const volatile u32 *gfx_front(u32 *pitch);
-/* The last frame's counts at its gfx_end: the vertices drawn, the draws and
- * the drains; a NULL pointer is skipped. */
+/* The last frame's counts at its gfx_end or gfx_submit: the vertices drawn,
+ * the draws and the drains; a NULL pointer is skipped. */
 void gfx_last_counts(u32 *vertices, u32 *draws, u32 *drains);
 
 /* One vertex, and a pointer to the next. Each field is its own 4-byte store:
@@ -95,13 +106,16 @@ static inline gfx_vtx *gfx_put(gfx_vtx *p, float x, float y, u32 rgba, float u, 
 
 /* The back end, for gfx.c only. vp is tx, ty, sx, sy. A draw is n vertices
  * of the area from index first, t NULL for colour only. drain returns when
- * the RSX has read every vertex drawn so far. */
+ * the RSX has read every vertex drawn so far. submit queues the end of the
+ * frame (its label, the flip and the wait for it) and returns; wait returns
+ * when the flip is done and the RSX has passed the label. */
 int gfx_be_init(u32 vtx_bytes, gfx_vtx **area);
 void gfx_be_begin(const float *vp);
 void gfx_be_viewport(const float *vp);
 void gfx_be_draw(int type, u32 first, u32 n, const gfx_tex *t);
 void gfx_be_drain(void);
-void gfx_be_end(void);
+void gfx_be_submit(void);
+void gfx_be_wait(void);
 void gfx_be_exit(void);
 
 #endif

@@ -217,6 +217,18 @@ int main(void)
     CHECK(st.vertices > 0 && st.draws > 0 && st.drains == 0 && st.vertices_max >= st.vertices && st.drains_sum == 0);
     ui_stats(&st, 0);
     CHECK(st.frames == 0 && st.period_max_us == 0 && st.period_us == 16667);
+
+    /* ui_submit: a frame counts at its wait in the next begin_frame. The
+     * preview's clock moves in pv_flip, at the submit, so the 16,667 us are
+     * busy and the wait is 0. The tenth frame waits for utf8's begin_frame. */
+    for (int f = 0; f < 10; f++) {
+        begin_frame();
+        footer("L1 previous  R1 next  L1/R1 page  CROSS play");
+        ui_submit();
+    }
+    ui_stats(&st, 1);
+    CHECK(st.frames == 9 && st.period_us == 16667 && st.wait_us == 0 && st.busy_us == 16667);
+    CHECK(st.wait_sum_us == 0 && st.busy_sum_us == 9ull * 16667 && st.slow == 0 && st.vertices > 0);
     utf8();                                                 /* last: the text stays UTF-8 */
 
     if (fails) {

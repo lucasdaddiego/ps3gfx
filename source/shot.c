@@ -11,6 +11,8 @@
 int ui_shot(const char *path)
 {
     u32 pitch = 0;
+    ui_wait();                               /* after a ui_submit: that frame on the TV, its times counted */
+    gfx_wait();                              /* after a bare gfx_submit */
     const volatile u32 *px = gfx_front(&pitch);
     if (!px) return -1;
     u8 *buf = malloc((size_t)gfx_w * 3 * ROWS);

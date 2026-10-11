@@ -283,13 +283,15 @@ void gfx_be_drain(void)
     wait_for(label, v);
 }
 
+static u32 pend_label;                       /* the label of the submitted frame */
+
 /* The label, then the flip and the wait for it in the order of PSL1GHT's
- * samples, then the waits: when this returns the frame is on the TV and the
- * RSX has read every vertex. The flush before gcmSetFlip puts PUT where its
- * words go; RPCS3's gcmSetFlip moves PUT past them itself. */
-void gfx_be_end(void)
+ * samples. The flush before gcmSetFlip puts PUT where its words go; RPCS3's
+ * gcmSetFlip moves PUT past them itself. The words are gfx_end's of before
+ * the split, in the same order: gfx_be_wait sends none. */
+void gfx_be_submit(void)
 {
-    u32 v = mark();
+    pend_label = mark();
     need(64);
     flush();
     gcmResetFlipStatus();
@@ -301,12 +303,18 @@ void gfx_be_end(void)
     ctx->current = wp;
     gcmSetWaitFlip(ctx);                     /* a later flush sends it */
     wp = ctx->current;
+}
+
+/* The waits: when this returns the frame is on the TV and the RSX has read
+ * every vertex. */
+void gfx_be_wait(void)
+{
     for (int i = 0; gcmGetFlipStatus() != 0 && i < POLLS; i++) usleep(200);   /* 0: flipped */
-    wait_for(label, v);
+    wait_for(label, pend_label);
     back ^= 1;
 }
 
-/* After gfx_be_end the TV shows the buffer that back no longer names; before
+/* After gfx_be_wait the TV shows the buffer that back no longer names; before
  * the first flip buffer 0 may be on it. */
 const volatile u32 *gfx_front(u32 *p)
 {

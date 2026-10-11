@@ -39,11 +39,16 @@ the context, the display buffers and the flip.
 - A draw is BEGIN_END, one VB_VERTEX_BATCH per 256 vertices, BEGIN_END 0. The
   first draw after each PUT move first sends the vertex cache invalidate
   (0x1710, then 0x1714 three times).
-- `gfx_end` writes backend label 255 after the last draw, queues the flip
-  (`gcmSetFlip`, `gcmSetWaitFlip`), and waits for the flip and for the label.
-  When it returns, the frame is on the TV and the RSX has read every vertex,
-  so the next frame writes its vertices from index 0 again. The frame stays
-  serial: one frame of latency.
+- `gfx_end` is `gfx_submit`, then `gfx_wait`. `gfx_submit` writes backend
+  label 255 after the last draw, queues the flip (`gcmSetFlip`,
+  `gcmSetWaitFlip`) and returns. `gfx_wait` waits for the flip and for the
+  label. When it returns, the frame is on the TV and the RSX has read every
+  vertex, so the next frame writes its vertices from index 0 again.
+  `gfx_begin`, and `gfx_prim` and `gfx_block` outside a frame, wait first.
+  Between the two halves the app can compute while the RSX draws (Cell
+  Bench's next kernel step), but it writes no vertex of the frame and no
+  texel of a texture that the frame drew. The RSX words are the same in both
+  forms, and the frame stays serial: one frame of latency.
 - A full vertex area drains: the label, the wait, index 0. Nothing is dropped.
   The largest frame in the preview's scenarios (Help, with the QR code of a
   drive report) takes 13,524 of the 49,152 vertices.
@@ -58,7 +63,7 @@ the context, the display buffers and the flip.
   samples. Then the RSX is idle, and the ring holds no word that it has not
   read.
 - `gfx_front` gives the colour buffer on the TV between frames: after
-  `gfx_end` that is the buffer that `back` no longer names. The kit's
+  `gfx_end` (or `gfx_wait`) that is the buffer that `back` no longer names. The kit's
   `ui_shot` reads it into a PPM; the PPU reads RSX memory at about 0.5 us a
   word, so a 1080p picture takes about 1 s.
 - Each check of the init has its own step number. When one fails, the app

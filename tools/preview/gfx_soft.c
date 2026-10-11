@@ -143,7 +143,8 @@ void gfx_be_drain(void)
     f_drains++;
 }
 
-void gfx_be_end(void)
+/* The preview draws in pv_flip, so the frame is done at its submit. */
+void gfx_be_submit(void)
 {
     fence();
     frames++;
@@ -155,7 +156,9 @@ void gfx_be_end(void)
     pv_flip();
 }
 
-void gfx_be_exit(void) {}                            /* gfx_be_end left nothing to draw */
+void gfx_be_wait(void) {}
+
+void gfx_be_exit(void) {}                            /* gfx_be_submit left nothing to draw */
 
 /* The raster's buffer: it holds the last frame that a snapshot rasterized. */
 const volatile u32 *gfx_front(u32 *pitch)

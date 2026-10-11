@@ -732,25 +732,13 @@ float num_field(float x, float y, int font, int value, int digits, int chosen)
 
 /* ---- a screen ------------------------------------------------------------- */
 
-/* No clear: the opaque background covers the whole output in every frame. */
-void begin_frame(void)
-{
-    gfx_begin();
-    background();
-}
-
-/* Quit Game from the PS button menu reaches sys_callback here, in every frame,
- * also while a job runs: the job ends before the app does. gfx_end shows the
- * frame and returns when the RSX has drawn it. */
 static ui_stat st;
-static s64 st_end;                           /* the end of the last ui_flip, 0 before the first */
+static s64 st_end;                           /* the end of the last frame's wait, 0 before the first */
+static int st_pending;                       /* a ui_submit frame: its wait is not counted yet */
 
-void ui_flip(void)
+/* A frame's times at the end of its wait, which ran from t1 to t2. */
+static void st_count(s64 t1, s64 t2)
 {
-    sysUtilCheckCallback();
-    s64 t1 = sysGetSystemTime();
-    gfx_end();
-    s64 t2 = sysGetSystemTime();
     gfx_last_counts(&st.vertices, &st.draws, &st.drains);
     if (st_end) {
         st.busy_us = (u32)(t1 - st_end);
@@ -768,6 +756,44 @@ void ui_flip(void)
         st.drains_sum += st.drains;
     }
     st_end = t2;
+}
+
+void ui_wait(void)
+{
+    if (!st_pending) return;
+    st_pending = 0;
+    s64 t1 = sysGetSystemTime();
+    gfx_wait();
+    st_count(t1, sysGetSystemTime());
+}
+
+/* No clear: the opaque background covers the whole output in every frame.
+ * After a ui_submit the wait for that frame comes first. */
+void begin_frame(void)
+{
+    ui_wait();
+    gfx_begin();
+    background();
+}
+
+/* Quit Game from the PS button menu reaches sys_callback here, in every frame,
+ * also while a job runs: the job ends before the app does. gfx_end shows the
+ * frame and returns when the RSX has drawn it. */
+void ui_flip(void)
+{
+    sysUtilCheckCallback();
+    s64 t1 = sysGetSystemTime();
+    gfx_end();                               /* with no frame open: the wait for a ui_submit frame */
+    st_pending = 0;
+    st_count(t1, sysGetSystemTime());
+}
+
+/* ui_flip without the wait: the next begin_frame waits for the frame. */
+void ui_submit(void)
+{
+    sysUtilCheckCallback();
+    gfx_submit();
+    st_pending = 1;
 }
 
 void ui_stats(ui_stat *s, int reset)

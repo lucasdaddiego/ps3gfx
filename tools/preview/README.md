@@ -105,10 +105,18 @@ One line per call, integers in hex, floats as hex floats (`%a`, exact):
                                            x y rgba u v, as the app wrote them
     gfx_block 8 38400 128                  type n align, then n vertex lines
     gfx_end
+    gfx_submit                             the end of a frame without the wait (ui_submit), as gfx_end
+    gfx_wait                               a wait of the app or the kit (begin_frame after a ui_submit,
+                                           ui_shot), a line of the next frame
     repeat 57                              57 more frames equal to the one before
     end 7402                               the number of frames
 
-A frame is the calls up to and with `gfx_end`. The vertex lines of a
+A frame is the calls up to and with `gfx_end` or `gfx_submit`: `repeat`,
+`end` and `PV_GFXTRACE_FRAMES` count both. Every gfx_wait call of the app or
+the kit writes a `gfx_wait` line, also when no frame waits (ui_shot after a
+ui_flip). The waits inside `gfx.c` (in `gfx_begin`, `gfx_end`, and in
+`gfx_prim` or `gfx_block` outside a frame) write none. A replay calls
+`gfx_submit` and `gfx_wait` for these lines. The vertex lines of a
 `gfx_prim` or a `gfx_block` go out at the app's next gfx call (then they are
 written).
 A `gfx_vram` from a job thread (an RSX memory test) can sit between two calls

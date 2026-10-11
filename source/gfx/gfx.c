@@ -14,6 +14,7 @@ static u32 cap, used;                        /* the area in vertices, and the pa
 static float vp[4] = {0, 0, 1, 1};           /* the viewport: tx, ty, sx, sy */
 static const gfx_tex *tex;                   /* the texture of the next primitives */
 static int in_frame;
+static int pending;                          /* a submitted frame gfx_wait has not waited for */
 static u32 n_vtx, n_draws, n_drains;         /* this frame's counts */
 static u32 last_vtx, last_draws, last_drains;    /* the last frame's, at its gfx_end */
 
@@ -67,11 +68,12 @@ void gfx_viewport(float tx, float ty, float sx, float sy)
     if (in_frame) gfx_be_viewport(vp);
 }
 
-/* The last frame's gfx_end waited for the RSX, so the vertices start again at
- * index 0. */
+/* After the wait for the last frame the RSX has read its vertices, so the
+ * vertices start again at index 0. */
 void gfx_begin(void)
 {
     if (in_frame) return;
+    gfx_wait();
     in_frame = 1;
     used = 0;
     gfx_be_begin(vp);
@@ -84,7 +86,10 @@ void gfx_texture(const gfx_tex *t) { tex = t; }
 gfx_vtx *gfx_prim(int type, int n)
 {
     if (n < 1 || n > GFX_PRIM_MAX) return NULL;      /* a caller error: a crash, not a write past the area */
-    if (!in_frame) return area;
+    if (!in_frame) {                         /* the dropped writes go to the area: not while the RSX reads it */
+        gfx_wait();
+        return area;
+    }
     if (used + n > cap) {                    /* the area is full: wait until the RSX read it, then reuse it */
         close_draw();
         gfx_be_drain();
@@ -108,7 +113,10 @@ gfx_vtx *gfx_block(int type, u32 n, u32 align)
 {
     if (type != GFX_QUADS && type != GFX_TRIANGLES) return NULL;
     if (!n || n > cap || n % (type == GFX_QUADS ? 4 : 3) || !align || align > 128 || (align & (align - 1))) return NULL;
-    if (!in_frame) return area;
+    if (!in_frame) {
+        gfx_wait();
+        return area;
+    }
     u32 step = align > 4 ? align / 4 : 1, first = (used + step - 1) / step * step;
     close_draw();
     if (first + n > cap) {                   /* as in gfx_prim: wait until the RSX read the area, then reuse it */
@@ -124,7 +132,7 @@ gfx_vtx *gfx_block(int type, u32 n, u32 align)
     return area + first;
 }
 
-void gfx_end(void)
+void gfx_submit(void)
 {
     if (!in_frame) return;
     close_draw();
@@ -133,7 +141,21 @@ void gfx_end(void)
     last_draws = n_draws;
     last_drains = n_drains;
     n_vtx = n_draws = n_drains = 0;
-    gfx_be_end();
+    gfx_be_submit();
+    pending = 1;
+}
+
+void gfx_wait(void)
+{
+    if (!pending) return;
+    pending = 0;
+    gfx_be_wait();
+}
+
+void gfx_end(void)
+{
+    gfx_submit();
+    gfx_wait();
 }
 
 void gfx_last_counts(u32 *vertices, u32 *draws, u32 *drains)

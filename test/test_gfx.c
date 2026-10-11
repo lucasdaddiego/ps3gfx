@@ -1,6 +1,6 @@
 /* Host test of gfx's front end (source/gfx/gfx.c) on a back end that records
  * the draws: the batching, the vertex area and its drains, the blocks, the
- * viewport and the frame. CI runs it with a small area of 409 vertices:
+ * viewport, the frame, and the submit and the wait. CI runs it with a small area of 409 vertices:
  *   cc -std=c99 -Wall -Wextra -DGFX_VTX_BYTES=8192 -I tools/preview/stub -I source/gfx \
  *      test/test_gfx.c source/gfx/gfx.c */
 #define _POSIX_C_SOURCE 200809L
@@ -18,7 +18,8 @@ static int fails;
 static gfx_vtx *area;
 static u32 area_n;                           /* the area in vertices */
 static struct { int type; u32 first, n; const gfx_tex *t; } draws[256];
-static int nd, drains, begins, ends, exits, viewports;
+static int nd, drains, begins, ends, waits, exits, viewports;
+static int outstanding;                      /* a submit without its wait: the back end gets nothing else */
 static float last_vp[4];
 
 int gfx_be_init(u32 vtx_bytes, gfx_vtx **out)
@@ -31,7 +32,12 @@ int gfx_be_init(u32 vtx_bytes, gfx_vtx **out)
     return 0;
 }
 
-void gfx_be_begin(const float *vp) { (void)vp; begins++; }
+void gfx_be_begin(const float *vp)
+{
+    (void)vp;
+    CHECK(!outstanding);
+    begins++;
+}
 
 void gfx_be_viewport(const float *vp)
 {
@@ -41,6 +47,7 @@ void gfx_be_viewport(const float *vp)
 
 void gfx_be_draw(int type, u32 first, u32 n, const gfx_tex *t)
 {
+    CHECK(!outstanding);
     if (nd < 256) {
         draws[nd].type = type;
         draws[nd].first = first;
@@ -50,12 +57,33 @@ void gfx_be_draw(int type, u32 first, u32 n, const gfx_tex *t)
     nd++;
 }
 
-void gfx_be_drain(void) { drains++; }
-void gfx_be_end(void) { ends++; }
-void gfx_be_exit(void) { exits++; }
+void gfx_be_drain(void)
+{
+    CHECK(!outstanding);
+    drains++;
+}
+
+void gfx_be_submit(void)
+{
+    CHECK(!outstanding);
+    outstanding = 1;
+    ends++;
+}
+
+void gfx_be_wait(void)
+{
+    outstanding = 0;
+    waits++;
+}
+
+void gfx_be_exit(void)
+{
+    CHECK(!outstanding);
+    exits++;
+}
 void *gfx_vram(u32 size, u32 align, u32 *offset) { (void)size; (void)align; (void)offset; return NULL; }
 
-static void reset(void) { nd = drains = begins = ends = exits = viewports = 0; }
+static void reset(void) { nd = drains = begins = ends = waits = exits = viewports = 0; }
 
 static int draw_is(int i, int type, u32 first, u32 n, const gfx_tex *t)
 {
@@ -213,6 +241,56 @@ static void frames(void)
     CHECK(ends == 1);
 }
 
+/* gfx_end is gfx_submit, then gfx_wait. A submitted frame gets one wait:
+ * from gfx_wait, the next gfx_begin, a gfx_prim or gfx_block outside a frame
+ * (its writes go to the area), or gfx_exit. A gfx_wait with nothing pending
+ * and a gfx_submit outside a frame do nothing. */
+static void submit(void)
+{
+    reset();
+    gfx_begin();
+    gfx_prim(GFX_QUADS, 4);
+    gfx_end();
+    CHECK(ends == 1 && waits == 1);
+    gfx_wait();
+    CHECK(waits == 1);
+
+    reset();
+    gfx_begin();
+    gfx_prim(GFX_QUADS, 4);
+    gfx_submit();
+    CHECK(ends == 1 && waits == 0);
+    gfx_submit();
+    CHECK(ends == 1 && waits == 0);
+    gfx_begin();
+    CHECK(begins == 2 && waits == 1);
+    CHECK(gfx_prim(GFX_QUADS, 4) == area);           /* after the wait the vertices start at index 0 */
+    gfx_submit();
+    gfx_wait();
+    gfx_wait();
+    CHECK(ends == 2 && waits == 2);
+
+    reset();
+    CHECK(gfx_prim(GFX_QUADS, 4) == area && waits == 0);     /* outside a frame, nothing pending */
+    gfx_begin();
+    gfx_prim(GFX_QUADS, 4);
+    gfx_submit();
+    CHECK(gfx_prim(GFX_QUADS, 4) == area && waits == 1);
+    gfx_begin();
+    gfx_prim(GFX_QUADS, 4);
+    gfx_submit();
+    CHECK(gfx_block(GFX_QUADS, 4, 4) == area && waits == 2);
+    gfx_end();                                       /* no frame: no submit, nothing to wait for */
+    CHECK(ends == 2 && waits == 2);
+
+    reset();
+    gfx_begin();
+    gfx_prim(GFX_QUADS, 4);
+    gfx_submit();
+    gfx_exit();
+    CHECK(ends == 1 && waits == 1 && exits == 1);
+}
+
 int main(void)
 {
     if (gfx_init() != 0) {
@@ -224,6 +302,7 @@ int main(void)
     drain();
     block();
     viewport();
+    submit();
     frames();
     if (fails) {
         printf("%d checks failed\n", fails);

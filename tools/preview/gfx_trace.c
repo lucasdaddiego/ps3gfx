@@ -19,6 +19,8 @@ void gfx_real_texture(const gfx_tex *t);
 gfx_vtx *gfx_real_prim(int type, int n);
 gfx_vtx *gfx_real_block(int type, u32 n, u32 align);
 void gfx_real_end(void);
+void gfx_real_submit(void);
+void gfx_real_wait(void);
 
 static FILE *tf;
 static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
@@ -206,3 +208,27 @@ void gfx_end(void)
     }
     gfx_real_end();                          /* the frame ends in pv_flip, which may exit */
 }
+
+/* A submitted frame ends here as gfx_end's does; the wait is a line of the
+ * next frame. The waits inside gfx.c (gfx_begin's, gfx_end's) are its own
+ * and not traced. */
+void gfx_submit(void)
+{
+    if (tf) {
+        pthread_mutex_lock(&mu);
+        if (tf) {
+            flush_prim();
+            line("gfx_submit");
+            frame_end();
+        }
+        pthread_mutex_unlock(&mu);
+    }
+    gfx_real_submit();                       /* the frame ends in pv_flip, which may exit */
+}
+
+void gfx_wait(void)
+{
+    call("gfx_wait");
+    gfx_real_wait();
+}
+
