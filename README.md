@@ -10,7 +10,8 @@ measuring screen, and the freeze journal. An app links `libps3gfx.a`,
 includes `<ps3gfx/ui.h>` and draws its screens inside a 1920 x 1080 canvas.
 The code is PS3 Health 2.0.1's, moved here file by file; a host preview and a
 host test come with it. The SPU kit, an SPU program and its contract for the
-six SPUs of PS3 Health's tests, is here too.
+six SPUs of PS3 Health's tests, is here too, and the effects program, a
+second SPU program for Couch's clouds, frosted glass, rain and aurora.
 
 ## The API by header
 
@@ -68,6 +69,22 @@ the memory layout, the source of each RSX word and the shader recipe):
 - `spu_kit_arg2`, the report `spu_kit_rec`, the local-store kernel `spu_kit_ls_pass` (with
   `spu_kit_ls_march`, `spu_kit_ls_addr` and `spu_kit_ls_got`; the accessors `SPU_KIT_RD` and `SPU_KIT_WR`)
 - `spu_kit_spu`, `spu_kit_spu_size`: the program, a member of the archive (PPU and host only)
+
+`<ps3gfx/spu_fx.h>`, the effects program (the section "The effects program"): the contract of the SPU program
+`data/spu_fx.spu`, for spu-gcc, ppu-gcc and the host:
+- `FX_SPUS`, `FX_MAGIC`, `FX_MARK`, the modes `FX_SKY`, `FX_RAIN`, `FX_AURORA`, the exit statuses `FX_EXIT_ARGS`,
+  `FX_EXIT_MODE`, `FX_EXIT_CTL`, `FX_EXIT_DONE`, the report statuses `FX_ST_OK`, `FX_ST_SERIAL`, `FX_KAT`
+- the pictures: `FX_SKY_W`, `FX_SKY_H`, `FX_SKY_PITCH`, `FX_GLASS_*`, `FX_AURORA_*`, `FX_SKY_BAND_MAX`,
+  `FX_GLASS_MARGIN`, `FX_GLASS_BAND_MAX`; the rain: `FX_RAIN_MAX`, `FX_SNOW_MAX`, `FX_SPLASHES`, `FX_RAIN_CHUNK`,
+  `FX_RAIN_MARGIN`, `FX_DROPS`, `FX_FLAKES`; `FX_NO_CHECK`
+- the control block `fx_ctl`, the report `fx_rec`, `fx_arg2`, `fx_rain_quads`, `fx_band`, `fx_rain_wind`
+- `spu_fx_spu`, `spu_fx_spu_size`: the program, a member of the archive (PPU and host only)
+
+`<ps3gfx/spu_fx_kern.h>`, the effects program's kernels and job drivers in plain C on a 4-lane layer (spu-gcc's
+vectors, or four plain lanes on the host): `fx_noise_init`, `fx_sky_job`, `fx_aurora_job`, `fx_rain_job`, the
+output callbacks `fx_io`, the buffers `fx_sky_ws`, `fx_aur_ws`, `fx_rain_state`, the vertex `fx_vtx` (gfx_vtx's
+layout), and the parts the jobs use (`fx_cloud_row`, `fx_glass_src`, `fx_hbox`, `fx_vbox`, `fx_aurora_row`, ...).
+An app's preview twin runs a job at once with an fx_io that copies into its textures.
 
 `<ps3gfx/digits.h>`, the display digits (`digits.c` with `digits.bin`, linked only by an app that calls
 `digits_init`: 1,945,472 B of RSX memory, 479,584 B of data in the ELF):
@@ -129,7 +146,10 @@ the display digits (`<ps3gfx/digits.h>`), the icons (`<ps3gfx/icons.h>`)
 and the drawing helpers (`<ps3gfx/fx.h>`). Each is a new source file, an
 archive member of its own, and its data is a member that only that file
 references: an app that calls none of them links none of them, and PS3
-Health's and Cell Bench's ELFs stay byte-identical. The atlases bind as the
+Health's and Cell Bench's ELFs stay byte-identical. Stages 4 and 5: the
+effects program (`<ps3gfx/spu_fx.h>`, `<ps3gfx/spu_fx_kern.h>`,
+`spu_fx_spu`), a second SPU program, so the kit's program, which PS3 Health
+embeds, does not change. The atlases bind as the
 fonts do (nearest at 1080p), except the L icons, which always bind bilinear
 because they turn and scale; their texels are white also at alpha 0, so a
 bilinear sample mixes no black into the edges.
@@ -160,8 +180,9 @@ source/gfx`, `DATA := data` (bin2o makes `fonts.bin`, `latin.bin`,
 `digits.bin` and `icons.bin` members of the archive with the symbols
 `fonts_bin`, `fonts_bin_end`, `fonts_bin_size` and the same for the others;
 `ui.o`, `text_utf8.o`, `digits.o` and `icons.o` depend on them for their
-headers; its own rule makes `spu_kit.spu` the member `spu_kit.spu.o`
-with `bin2s -a 128`, the SPU kit), and `CFLAGS = -O2 -Wall -mcpu=cell
+headers; its own rules make `spu_kit.spu` and `spu_fx.spu` the members
+`spu_kit.spu.o` and `spu_fx.spu.o` with `bin2s -a 128`, the SPU kit and the
+effects program), and `CFLAGS = -O2 -Wall -mcpu=cell
 $(MACHDEP) $(INCLUDE)`, PS3 Health 2.0.1's flags, so the code is the
 console-tested one. It errors when `PSL1GHT` or `PS3DEV` is unset (ppu_rules
 would default `PS3DEV` to `/usr/local/ps3dev`). The vertex area
@@ -171,7 +192,8 @@ smaller sizes still work there.
 
 `make install` copies, into `$PS3DEV/portlibs/ppu`:
 - `lib/libps3gfx.a`;
-- `include/ps3gfx/gfx.h`, `ui.h`, `fs.h`, `journal.h`, `spu_kit.h`, `digits.h`, `icons.h`, `icons_ids.h`, `fx.h`;
+- `include/ps3gfx/gfx.h`, `ui.h`, `fs.h`, `journal.h`, `spu_kit.h`, `digits.h`, `icons.h`, `icons_ids.h`, `fx.h`,
+  `spu_fx.h`, `spu_fx_kern.h`;
 - `share/ps3gfx/OFL.txt` and `share/ps3gfx/PHOSPHOR.txt`;
 - `share/ps3gfx/COMMIT`: the full commit id of the checkout, `-dirty` when
   tracked files changed, `unknown` outside a git repository. An app's
@@ -330,6 +352,123 @@ This build (spu-gcc 7.2.0): text 5,240 bytes, data 800, bss 272, `_end`
 heat 320 bytes, ls 496, main 80. No console has run the kit yet: PS3 Health
 2.1.0 rc1 is its first round.
 
+## The effects program
+
+`spu/fx/main.c` is the SPU program of Couch 0.3.0's effects (its design,
+sections 3 and 4.4), and `<ps3gfx/spu_fx.h>` is its contract. The archive
+embeds the stripped program, `data/spu_fx.spu` (committed), as the member
+`spu_fx.spu.o` with `bin2s -a 128`, as the kit's. It is a second program,
+not new modes of the kit: PS3 Health embeds `spu_kit.spu`, so a change there
+changes Health's ELF, and the kit's local-store test needs that image under
+0x8000, while this one keeps about 110 KB of buffers. An app that references
+neither `spu_fx_spu` nor `spu_fx_spu_size` links neither. The library makes
+no LV2 call: the app makes and journals the group (Couch's `spu_fx_run.c`).
+
+The arguments of each of the six threads: arg0 the EA of its report, arg1
+the EA of its control block (both 128-byte aligned, below 4 GB), arg2
+`fx_arg2(index)` (the mark 0xce11 and the index; bits 32 to 63 are 0, the job
+names the mode). At its start a thread writes the decrementer once, builds
+its noise table, runs the known-answer test and puts its first report
+(serial 0, `kat`).
+
+A job: the app writes the thread's `fx_ctl`, then `__sync_synchronize()`,
+then the job's serial into its inbound mailbox. The thread reads the block
+by DMA and runs the job only when the block's serial is the mailbox word;
+else it puts a report with `status` `FX_ST_SERIAL` and writes nothing else.
+After the job it puts the report: `serial`, `done` 1, `ticks` (the
+decrementer ticks of the job), `count` (the jobs so far), `sum` (the word
+sum of the check row, or of every rain word sent), `sum2` (the glass's check
+row), `quads`. An exit flag in the block gives a last report (`done` 2) and
+the exit status `FX_EXIT_DONE | index`. The first 48 bytes of the report are
+the kit's. The mode is a field of each block: one thread may run a sky job,
+then an aurora job; the rain's particles stay in the local store from one
+rain job to the next.
+
+The modes:
+- `FX_SKY` (10): the clouds, 480 x 270 A8R8G8B8 (`out`), and the frosted
+  glass, 240 x 135 (`out2`), for the rows [y0, y1) and the glass rows
+  [y0 / 2, y1 / 2) (five bands of 54 rows: `fx_band`). A cloud pixel: a
+  warp, then three octaves of value noise from a 64 x 64 lattice whose cells
+  hold their four corners in one word (four table reads a pixel), the
+  coverage as a soft band centred on the cover's quantile, the light (thick
+  cores darker, the sun's side lighter, a flash), the edge colour on thin
+  cloud. Every texel has the cloud's colour, also where the alpha is 0
+  (bilinear filtering mixes RGB without premultiplied alpha), and an alpha
+  under 0x30 is an ordered 4 x 4 dither to multiples of 0x10 (its mean is the
+  alpha; ps3gfx's alpha test drops texels under 0x10). The glass: the sky's
+  gradient (`sky[4]` at 0, 55, 80 and 100 % of the height) and the clouds
+  composited at the centre of each glass pixel, for the band's rows and 9
+  more on each side, then three box passes of radius 3 on each axis in
+  integers (raw sums, then / 343 rounded once per axis: 343 is odd, so no
+  value is a half and the SPU and the host give the same bits). The margin
+  makes each band's glass independent of the others.
+- `FX_RAIN` (11): up to 1,500 drops (or 300 flakes, `kind` `FX_FLAKES`) in
+  the local store, moved by `dt` each job; the quads go to `out`, the first
+  vertex of `gfx_block(GFX_QUADS, 4 * fx_rain_quads(count, kind), 128)`, in
+  chunks of 200 quads (16,000 B). A drop's streak is its velocity times 18 ms,
+  so it slants with the wind (`fx_rain_wind`: a wind from the south-east
+  moves the drops left; capped at 70 % of the fall). Three layers by index:
+  far drops slow, short and dim. 40 splash quads follow the drops. A flake is
+  a square for the glow texture, swaying 20 px at 0.5 Hz.
+- `FX_AURORA` (12): 640 x 360 A8R8G8B8 for the rows [y0, y1): three curtains
+  (each a base height from 1D noise, one fold in about 20 s, fine rays and a
+  slow brightness along x; exp fall-off above the base, a sharp edge under
+  it, green to violet upward), a star field (one pixel in 900, a twinkle),
+  over the night sky `top` to `bottom`. `gain` 1 is the cap: the mean
+  brightness stays at most 20 % (the test: at most 10.0 % over 36 pictures).
+
+The exit statuses:
+
+| Status | When |
+|---|---|
+| 0x200, `FX_EXIT_ARGS` | the mark, arg0 or arg1 is wrong: no DMA |
+| 0x300 \| index, `FX_EXIT_MODE` | a job of an unknown mode: no output, no report |
+| 0x400 \| index, `FX_EXIT_CTL` | a job's addresses or numbers are out of range: no output, no report |
+| 0x700 \| index, `FX_EXIT_DONE` | the exit flag: the last report has `done` 2 |
+
+The known-answer test (`fx_kat`) runs the helpers whose SPU form is a
+shuffle, a gather or a conversion on known integers; the report's `kat` must
+be `FX_KAT`, or the app keeps the SPUs off.
+
+`make -C spu/fx` makes `spu/fx/build/spu_fx.elf`, the stripped
+`spu/fx/build/spu_fx.spu` and `build/main.su` (the stack use of each
+function); `make -C spu/fx update` copies the program to `data/spu_fx.spu`.
+The flags are the kit's (no libm: sin and exp are polynomials).
+
+This build (spu-gcc 7.2.0): text 22,104 bytes, data 784 (newlib's), bss
+116,240, `data/spu_fx.spu` 24,600 bytes. The local store:
+
+| Address | Size | What |
+|---|---|---|
+| 0x00000 | 23,600 B | the code, the constants, newlib's data |
+| 0x05d00 | 74,752 B | one union of the jobs' buffers: the sky's (two rows, the horizontal passes, the glass band 3 x 45 x 240 x 16 bits), the aurora's (the curtains per column, two rows), the rain's two quad buffers |
+| 0x18100 | 24,704 B | the rain's particles and splashes (kept between jobs) |
+| 0x1e180 | 16,384 B | the noise table |
+| 0x22180 | 256 B | the control block, the report |
+| 0x22290 | | `_end` (CI: at most 0x28000); 105,840 B free under 0x3c000 |
+| 0x3c000 | 16 KB | the stack; the deepest call is about 2.9 KB (main 1,280 B, the sky job 1,600 B) |
+
+The cost on the SPU is an estimate: the instructions of each inner loop
+(spu-objdump), even and odd pipes counted apart, one cycle per instruction
+of the busier pipe (no stalls), at 3.2 GHz:
+
+| Job | Per pixel or quad | One SPU's share of a picture | Design |
+|---|---|---|---|
+| FX_SKY: the clouds | 72 cycles | 54 rows: 1.87 M cycles | |
+| FX_SKY: the glass source | 72 cycles | 45 rows of 240: 0.78 M | |
+| FX_SKY: the blur and the glass rows | | 0.67 M | |
+| FX_SKY, all | | 3.3 M = 1.04 ms (1.3 to 1.5 ms with stalls) | 0.6 ms |
+| FX_AURORA | 41 cycles | 72 rows: 1.97 M = 0.62 ms (0.8 ms with stalls) | 1.2 to 1.4 ms |
+| FX_RAIN | about 140 cycles a quad, 50 more for the sum | 1,540 quads: 0.3 M = 0.09 ms | 0.03 to 0.05 ms |
+
+At 30 pictures a second, the sky keeps each of five SPUs 3 to 5 % busy (the
+design: 2 %); a picture still takes under 2 ms of the 33 ms it may take.
+Most of the sky's even-pipe work is the noise's arithmetic and the float
+constants that spu-gcc builds again in each loop. On the host (Apple M4, one
+thread, the plain lanes): a sky picture 2.7 ms, an aurora picture 2.0 ms, a
+rain job 0.007 ms. No console has run the program yet: Couch 0.3.0's round
+measures every job's ticks.
+
 ## The preview on the host
 
 `tools/preview/` compiles an app on the frame for the Mac or Linux against
@@ -348,7 +487,7 @@ weak symbols: an app's `tools/preview/pv_app.c` defines the strong
 end, the gfx traces (`PV_GFXTRACE`), `diff.py` and the pad scripts.
 `tools/preview/smoke/` is the smallest app, for CI. On the host an app
 includes `<ps3gfx/ui.h>` as on the console: `tools/preview/stub/ps3gfx/`
-holds a forwarder to the checkout's own header for each of the nine public
+holds a forwarder to the checkout's own header for each of the eleven public
 headers, so the preview builds against the sources it previews, never
 against the installed copy.
 
@@ -374,6 +513,16 @@ against the installed copy.
   the down marches, the last up read, the background 0x55555555, the address
   pass. Also the saturating count and no write outside the area:
   `cc -std=c99 -Wall -Wextra -I source test/test_spu_kit.c`.
+- `test/test_spu_fx.c`: the effects program (the section "The effects program"): the contract's sizes and
+  layout, the known-answer test, FX_SKY's band equality (five bands of 54 rows, then six uneven ones, each
+  alone equal to its rows of the full picture, the glass rows too), the determinism, the coverage ends, the RGB
+  rule under alpha 0, the dither, the blur (flat in, flat out; random rows equal to a plain reference of three
+  box passes per axis; the raw weights sum to 343 and spread an impulse symmetrically), FX_AURORA's band
+  equality and its brightness cap, FX_RAIN's count, bounds, slant against the wind, cap, determinism and snow,
+  the jobs' refusals, and that a driver waits for a buffer before it fills it again:
+  `cc -std=c99 -O2 -Wall -Wextra -ffp-contract=off -I source -I source/gfx -I tools/preview/stub test/test_spu_fx.c -lm`.
+  `--golden` checks the pictures' hashes (the same on arm64 and x86-64 with clang 21; CI does not run it),
+  `--out DIR` writes the reference pictures as PPM, `--bench` times the jobs on the host.
 - `tools/preview/kitcheck/` (CI): an app for the host only that calls the kit
   on the preview and checks the results against the rules of the headers:
   text_wrap_lines against text_wrap (5,250 cases), the va_list calls against the variadic ones (also past the
@@ -411,13 +560,15 @@ against the installed copy.
 - The SPU kit's program (CI): the bundle's `spu-gcc` builds it again and the
   bytes must be `data/spu_kit.spu`; `spu-nm` finds no malloc, sbrk or printf
   symbol and `_end` at most 0x8000.
+- The effects program (CI): the same with `data/spu_fx.spu` and `_end` at most
+  0x28000, and the two members' 128-byte alignment.
 - The RSX-word harness (outside the repository) replays recorded traces
   through `source/gfx/` on a host model of the RSX and compares the words
   with PS3 Health 2.0.1's.
-- CI (`.github/workflows/ci.yml`): the host job runs the journal, file, gfx and SPU kit tests, the kit check, the
+- CI (`.github/workflows/ci.yml`): the host job runs the journal, file, gfx, SPU kit and effects tests, the kit check, the
   script and Python checks and the smoke preview on gcc with one snapshot and its texture check;
   the ppu job builds and installs the archive with the same `sdk_setup.sh`,
-  builds the SPU kit's program again and compares it with the committed one,
+  builds the two SPU programs again and compares them with the committed ones,
   and runs the `spu-nm` and `ppu-nm` checks.
 
 ## Speed on the console

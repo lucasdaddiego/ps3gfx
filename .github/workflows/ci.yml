@@ -53,6 +53,17 @@ jobs:
           cc -std=c99 -Wall -Wextra -I source -o test_spu_kit test/test_spu_kit.c
           ./test_spu_kit
 
+      # The effects program's kernels and job drivers on the host (the SPU
+      # program runs the same source): the contract, the band equality, the
+      # blur against a plain reference, the dither, the aurora's brightness
+      # cap, the rain's count, bounds and slant, the known-answer test.
+      # -ffp-contract=off as on the developer's machine; the golden hashes
+      # (--golden) stay off here: another compiler may round differently.
+      - name: Host test (the effects program's kernels, the SPU's job drivers on a host fx_io)
+        run: |
+          cc -std=c99 -O2 -Wall -Wextra -ffp-contract=off -I source -I source/gfx -I tools/preview/stub -o test_spu_fx test/test_spu_fx.c -lm
+          ./test_spu_fx
+
       - name: Preview smoke (the world on gcc, one snapshot)
         run: |
           zsh tools/preview/build.zsh APP=tools/preview/smoke
@@ -120,10 +131,27 @@ jobs:
           if [ -z "$end" ] || [ $((0x$end)) -gt $((0x8000)) ]; then echo "_end 0x$end: not found or over 0x8000"; exit 1; fi
           echo "_end 0x$end, data/spu_kit.spu $(wc -c < data/spu_kit.spu) bytes"
 
+      # The effects program: the same checks, with its own budget. Its
+      # buffers are in .bss (the sky's band, the rain's particles): _end at
+      # most 0x28000 keeps 80 KB free under the stack's 16 KB.
+      - name: SPU effects program (spu-gcc gives the committed bytes, no heap or printf, _end at most 0x28000)
+        run: |
+          make -C spu/fx
+          sha256sum spu/fx/build/spu_fx.spu data/spu_fx.spu
+          cmp spu/fx/build/spu_fx.spu data/spu_fx.spu || { echo "spu/fx/build/spu_fx.spu differs from data/spu_fx.spu; the CI build in base64:"; base64 < spu/fx/build/spu_fx.spu; exit 1; }
+          "$PS3DEV/spu/bin/spu-nm" spu/fx/build/spu_fx.elf > spu_fx_nm.txt
+          heap=$(awk '$NF ~ /malloc|sbrk|printf/ {print $NF}' spu_fx_nm.txt | tr '\n' ' ')
+          if [ -n "$heap" ]; then echo "heap or printf symbols in the effects program: $heap"; exit 1; fi
+          end=$(awk '$NF == "_end" {print $1}' spu_fx_nm.txt)
+          if [ -z "$end" ] || [ $((0x$end)) -gt $((0x28000)) ]; then echo "_end 0x$end: not found or over 0x28000"; exit 1; fi
+          echo "_end 0x$end, data/spu_fx.spu $(wc -c < data/spu_fx.spu) bytes"
+          cat spu/fx/build/main.su
+
       # The functions are D (PPC64 ELFv1: the global symbol is the function
       # descriptor in .opd), fonts_bin, latin_bin, digits_bin, icons_bin,
-      # spu_kit_spu and spu_kit_spu_size are R. The SPU kit's member must
-      # keep its 128-byte alignment (bin2s -a 128; bin2o gives 64). Every
+      # spu_kit_spu, spu_kit_spu_size, spu_fx_spu and spu_fx_spu_size are
+      # R. The two SPU programs' members must keep their 128-byte alignment
+      # (bin2s -a 128; bin2o gives 64). Every
       # undefined symbol that another member does not define must be
       # PSL1GHT's or the toolchain's (newlib, libsysbase): the sysLv2Fs*
       # calls are inline syscalls, never U.
@@ -131,8 +159,10 @@ jobs:
         run: |
           ppu-nm lib/libps3gfx.a > nm.txt
           for s in gfx_init ui_init journal_start text_utf8 digits_init icons_init tex_round; do grep -Eq " [TD] $s\$" nm.txt || { echo "no $s in the archive"; exit 1; }; done
-          for s in fonts_bin latin_bin digits_bin icons_bin spu_kit_spu spu_kit_spu_size; do grep -Eq " R $s\$" nm.txt || { echo "no $s in the archive"; exit 1; }; done
-          ppu-objdump -h lib/libps3gfx.a | awk '/^spu_kit\.spu\.o:/{m=1} m && $2==".rodata"{print $NF; exit}' | grep -qx '2\*\*7' || { echo "spu_kit.spu.o: .rodata is not 128-byte aligned"; exit 1; }
+          for s in fonts_bin latin_bin digits_bin icons_bin spu_kit_spu spu_kit_spu_size spu_fx_spu spu_fx_spu_size; do grep -Eq " R $s\$" nm.txt || { echo "no $s in the archive"; exit 1; }; done
+          for m in spu_kit spu_fx; do
+            ppu-objdump -h lib/libps3gfx.a | awk -v m="$m.spu.o:" '$1==m{f=1} f && $2==".rodata"{print $NF; exit}' | grep -qx '2\*\*7' || { echo "$m.spu.o: .rodata is not 128-byte aligned"; exit 1; }
+          done
           awk '$1=="U"{u[$2]=1} ($2 ~ /^[TRDBC]$/){d[$3]=1} END{for(s in u) if(!(s in d)) print s}' nm.txt | sort > undefined.txt
           cat > allowed.txt <<'EOF'
           cosf

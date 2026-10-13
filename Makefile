@@ -20,9 +20,10 @@ include $(PSL1GHT)/ppu_rules
 # INCLUDES is a list of directories containing extra header files
 # DATA holds fonts.bin, latin.bin, digits.bin and icons.bin: bin2o makes each
 # a member of the archive (fonts_bin, latin_bin, digits_bin, icons_bin). It
-# also holds spu_kit.spu, the SPU kit's program
-# (spu/Makefile builds it, the file is committed): the member spu_kit.spu.o,
-# from its own rule below
+# also holds spu_kit.spu, the SPU kit's program, and spu_fx.spu, the effects
+# program (spu/Makefile and spu/fx/Makefile build them, the files are
+# committed): the members spu_kit.spu.o and spu_fx.spu.o, from their own
+# rules below
 #---------------------------------------------------------------------------------
 TARGET		:=	ps3gfx
 BUILD		:=	build
@@ -61,7 +62,7 @@ export BUILDDIR	:=	$(CURDIR)/$(BUILD)
 CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.bin)))
 
-export OFILES	:=	$(addsuffix .o,$(BINFILES)) spu_kit.spu.o $(CFILES:.c=.o)
+export OFILES	:=	$(addsuffix .o,$(BINFILES)) spu_kit.spu.o spu_fx.spu.o $(CFILES:.c=.o)
 
 #---------------------------------------------------------------------------------
 # build a list of include paths: the library uses nothing from $(PORTLIBS)
@@ -83,6 +84,7 @@ clean:
 	@echo clean ...
 	@rm -fr $(BUILD) lib
 	@$(MAKE) --no-print-directory -C spu clean
+	@$(MAKE) --no-print-directory -C spu/fx clean
 
 #---------------------------------------------------------------------------------
 # install: the archive, the public headers as <ps3gfx/*.h>, OFL.txt (every
@@ -96,6 +98,7 @@ install: $(BUILD)
 	@cp lib/lib$(TARGET).a $(PORTLIBS)/lib/
 	@cp source/gfx/gfx.h source/ui.h source/fs.h source/journal.h source/spu_kit.h $(PORTLIBS)/include/ps3gfx/
 	@cp source/digits.h source/icons.h source/icons_ids.h source/fx.h $(PORTLIBS)/include/ps3gfx/
+	@cp source/spu_fx.h source/spu_fx_kern.h $(PORTLIBS)/include/ps3gfx/
 	@cp OFL.txt LICENSES/PHOSPHOR.txt $(PORTLIBS)/share/ps3gfx/
 	@rev=$$(git rev-parse HEAD 2>/dev/null) && { git diff --quiet HEAD 2>/dev/null || rev=$$rev-dirty; } || rev=unknown; \
 		echo $$rev > $(PORTLIBS)/share/ps3gfx/COMMIT
@@ -134,6 +137,13 @@ icons.o: icons.bin.o
 # file out of the data/*.bin rule.
 #---------------------------------------------------------------------------------
 spu_kit.spu.o	:	spu_kit.spu
+	@echo $(notdir $<)
+	@bin2s -a 128 $< | $(AS) -o $(@)
+
+# The effects program (Couch 0.3.0): the same rule. source/spu_fx.h declares
+# spu_fx_spu and spu_fx_spu_size; an app that references neither links
+# neither this member nor the program.
+spu_fx.spu.o	:	spu_fx.spu
 	@echo $(notdir $<)
 	@bin2s -a 128 $< | $(AS) -o $(@)
 
