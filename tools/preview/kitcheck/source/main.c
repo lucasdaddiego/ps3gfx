@@ -7,16 +7,24 @@
  *       PV_SCRIPT="10-70:DOWN 80-82:DOWN 50:SNAP=kit" tools/preview/kitcheck/tools/preview/build/pv
  * It prints each failed check and exits 1, or prints "kitcheck: all checks
  * passed" and exits 0 after frame 100. Frame 50's ui_shot, shot.ppm in the
- * app folder, must equal the snapshot kit.ppm byte for byte (CI: cmp). */
+ * app folder, must equal the snapshot kit.ppm byte for byte (CI: cmp).
+ * After the pad's frames: the display digits, the icons and fx.h, checked
+ * on the vertices each call writes (the frame's vertex area is contiguous:
+ * a mark before and after a call holds them), and the RSX memory that
+ * digits_init and icons_init take. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <math.h>
 #include <string.h>
 #include <net/net.h>
 #include <sysutil/sysutil.h>
 #include <ps3gfx/ui.h>
 #include <ps3gfx/gfx.h>
 #include <ps3gfx/fs.h>
+#include <ps3gfx/digits.h>
+#include <ps3gfx/icons.h>
+#include <ps3gfx/fx.h>
 
 #define DIR "/dev_hdd0/tmp/ps3gfx_kitcheck"
 
@@ -176,6 +184,293 @@ static void net(void)
     CHECK(sysUtilGetSystemParamInt(SYSUTIL_SYSTEMPARAM_ID_TIME_FORMAT, &fmt) == 0 && fmt == 1);
 }
 
+/* ---- digits, icons and fx.h: the vertices of each call -------------------- */
+
+/* A mark in the frame's vertex area: a triangle of alpha 0 (the alpha test
+ * drops it). A call's vertices lie between the end of one mark and the next. */
+static gfx_vtx *mark(void)
+{
+    gfx_texture(NULL);
+    gfx_vtx *q = gfx_prim(GFX_TRIANGLES, 3);
+    for (int i = 0; i < 3; i++) gfx_put(q + i, 0, 0, 0, 0, 0);
+    return q;
+}
+
+static gfx_vtx cap[1024];
+static int ncap;
+static gfx_vtx *cap_from;
+
+static void cap_start(void) { cap_from = mark() + 3; }
+
+static int cap_end(void)
+{
+    gfx_vtx *e = mark();
+    ncap = (int)(e - cap_from);
+    if (ncap > 1024) ncap = 1024;
+    if (ncap > 0) memcpy(cap, cap_from, ncap * sizeof *cap);
+    return ncap;
+}
+
+static int same(const gfx_vtx *a, const gfx_vtx *b) { return !memcmp(a, b, sizeof *a); }
+static int near(float a, float b, float e) { return fabsf(a - b) <= e; }
+
+/* The RSX memory a call takes: the offsets of two small blocks around it. */
+static u32 vram_at(void)
+{
+    u32 off = 0;
+    gfx_vram(128, 128, &off);
+    return off;
+}
+
+static void digit_checks(void)
+{
+    static const char *const sz[D_COUNT] = {"D_M", "D_L", "D_XL"};
+    const char *all = "0123456789:,.-+%\xc2\xb0";
+    CHECK(digits_w(D_L, "12") == 0 && digits_h(D_L) == 0);           /* before digits_init: nothing */
+    u32 a = vram_at();
+    CHECK(digits_init() == 0 && digits_init() == 0);
+    u32 b = vram_at();
+    printf("digits_init: %u bytes of RSX memory\n", b - a - 128);
+    CHECK(digits_h(D_M) > 0 && digits_h(D_L) > digits_h(D_M) && digits_h(D_XL) > digits_h(D_L));
+    CHECK(digits_w(-1, "1") == 0 && digits_w(D_COUNT, "1") == 0 && digits_h(D_COUNT) == 0);
+    begin_frame();
+    for (int k = 0; k < D_COUNT; k++) {
+        int w0 = digits_w(k, "0"), sum = 0;
+        for (char c = '0'; c <= '9'; c++) {                       /* tabular: one advance */
+            char d[2] = {c, 0};
+            CHECK(digits_w(k, d) == w0);
+        }
+        CHECK(w0 > 0);
+        for (const char *p = "0123456789:,.-+%\xb0"; *p; p++) {    /* each glyph's width, and the sum */
+            char d[2] = {*p, 0};
+            CHECK(digits_w(k, d) > 0);
+            sum += digits_w(k, d);
+        }
+        CHECK(digits_w(k, all) == sum && digits_w(k, "0123456789:,.-+%\xb0") == sum);
+        CHECK(digits_w(k, "\xc2\xb0") == digits_w(k, "\xb0"));  /* the degree sign in UTF-8 and Latin-1 */
+        CHECK(digits_w(k, "1a 2") == digits_w(k, "12") && digits_w(k, "") == 0);   /* other bytes: no width */
+        CHECK(digits_w(k, "-") == digits_w(k, "+"));             /* the minus sign: the width of the plus */
+        cap_start();
+        float x = digits(100.4f, 200, k, WHITE, all);
+        CHECK(cap_end() == 17 * 4 && x == 100 + sum);             /* every glyph draws its cell, from a whole pixel */
+        float cw = cap[1].x - cap[0].x, ch = cap[2].y - cap[1].y;
+        for (int i = 0; i < 17; i++) {
+            const gfx_vtx *q = cap + 4 * i;
+            CHECK(q[1].x - q[0].x == cw && q[2].y - q[1].y == ch && q[0].y == cap[0].y && q[0].u < q[1].u && q[1].v < q[2].v);
+            CHECK(q[0].u >= 0 && q[1].u <= 1 && q[0].v >= 0 && q[2].v <= 1);
+        }
+        CHECK(digits_r(500, 200, k, WHITE, "12:34") == 500 - digits_w(k, "12:34"));
+        for (const char *p = "0123456789:,.-+%\xb0"; *p; p++) {    /* the two halves at scale 1: the whole glyph */
+            char d[2] = {*p, 0};
+            gfx_vtx g[4], t[4], u[4];
+            cap_start();
+            float xa = digits(300, 400.3f, k, WHITE, d);
+            CHECK(cap_end() == 4);
+            memcpy(g, cap, sizeof g);
+            cap_start();
+            float xb = digits_half(300, 400.3f, k, *p, 0, 1, WHITE);
+            CHECK(cap_end() == 4);
+            memcpy(t, cap, sizeof t);
+            cap_start();
+            float xc = digits_half(300, 400.3f, k, *p, 1, 1, WHITE);
+            CHECK(cap_end() == 4);
+            memcpy(u, cap, sizeof u);
+            CHECK(xa == xb && xb == xc);
+            CHECK(same(&t[0], &g[0]) && same(&t[1], &g[1]) && same(&u[2], &g[2]) && same(&u[3], &g[3]));
+            CHECK(t[2].y == u[1].y && t[3].y == u[0].y && t[2].v == u[1].v && t[3].v == u[0].v);
+            CHECK(t[2].x == g[2].x && u[0].x == g[3].x && t[2].u == g[2].u && u[0].u == g[3].u);
+            CHECK(t[2].y == 400 + digits_mid(k) && t[2].y > g[0].y && t[2].y < g[2].y);
+            CHECK(near(t[2].v, g[0].v + (g[2].v - g[0].v) * (t[2].y - g[0].y) / (g[2].y - g[0].y), 1e-6f));   /* the line's texel row */
+            cap_start();
+            digits_half(300, 400, k, *p, 0, 0.5f, WHITE);           /* half height, from the middle line */
+            CHECK(cap_end() == 4 && cap[2].y == 400 + digits_mid(k) && near(cap[2].y - cap[0].y, (t[2].y - t[0].y) / 2, 0.001f));
+            cap_start();
+            digits_half(300, 400, k, *p, 1, 0, WHITE);
+            CHECK(cap_end() == 0);                                /* scale 0: nothing */
+        }
+        printf("digits %s: cell %.0f x %.0f, digit advance %d, line %d, middle line %d\n", sz[k], cw, ch, w0, digits_h(k), digits_mid(k));
+    }
+    cap_start();
+    CHECK(digits(10, 10, D_COUNT, WHITE, "1") == 10 && digits_half(10, 10, -1, '1', 0, 1, WHITE) == 10);
+    CHECK(cap_end() == 0);
+    ui_flip();
+}
+
+static void icon_checks(void)
+{
+    CHECK(icon_size(IC_S_CARET_UP) == 0);                       /* before icons_init: nothing */
+    u32 a = vram_at();
+    CHECK(icons_init() == 0 && icons_init() == 0);
+    u32 b = vram_at();
+    printf("icons_init: %u bytes of RSX memory, %d icons\n", b - a - 128, IC_COUNT);
+    CHECK(icon_size(IC_S_CARET_UP) == 32 && icon_size(IC_S_UMBRELLA) == 32 && icon_size(IC_M_SUN_FILL) == 64);
+    CHECK(icon_size(IC_M_CLOUD_LIGHTNING_LINE) == 64 && icon_size(IC_L_SUN_FILL) == 168 && icon_size(IC_L_SNOWFLAKE_LINE) == 168);
+    CHECK(icon_size(-1) == 0 && icon_size(IC_COUNT) == 0);
+    static float uv[IC_COUNT][4];
+    begin_frame();
+    for (int id = 0; id < IC_COUNT; id++) {
+        gfx_vtx g[4];
+        cap_start();
+        icon(id, 400, 300, WHITE);
+        CHECK(cap_end() == 4);                                    /* every id draws its cell */
+        memcpy(g, cap, sizeof g);
+        CHECK(g[1].x > g[0].x && g[2].y > g[1].y && g[0].u < g[1].u && g[1].v < g[2].v && g[0].u >= 0 && g[1].u <= 1);
+        CHECK((g[0].x + g[1].x) / 2 == 400 && (g[1].y + g[2].y) / 2 == 300);   /* centred */
+        CHECK(g[1].x - g[0].x >= icon_size(id) / 2 && g[1].x - g[0].x <= 2 * icon_size(id));
+        uv[id][0] = g[0].u, uv[id][1] = g[0].v, uv[id][2] = g[2].u, uv[id][3] = g[2].v;
+        cap_start();
+        icon(id, 400.4f, 299.6f, WHITE);                          /* the centre snaps to a whole pixel */
+        CHECK(cap_end() == 4 && same(&cap[0], &g[0]) && same(&cap[2], &g[2]));
+        cap_start();
+        icon_rot(id, 400, 300, 0, 1, WHITE);                      /* no turn: the vertices of icon */
+        CHECK(cap_end() == 4);
+        for (int k = 0; k < 4; k++) CHECK(same(&cap[k], &g[k]));
+        cap_start();
+        icon_rot(id, 400, 300, 3.14159265f, 2, WHITE);            /* a half turn at scale 2: about the centre */
+        CHECK(cap_end() == 4 && near(cap[0].x, 400 + 2 * (400 - g[0].x), 0.01f) && near(cap[0].y, 300 + 2 * (300 - g[0].y), 0.01f));
+        CHECK(cap[0].u == g[0].u && cap[2].v == g[2].v);
+    }
+    for (int i = 0; i < IC_COUNT; i++)                          /* no two ids share a cell */
+        for (int j = 0; j < i; j++)
+            CHECK(memcmp(uv[i], uv[j], sizeof uv[i]) || icon_size(i) != icon_size(j));
+    cap_start();
+    icon(-1, 10, 10, WHITE);
+    icon(IC_COUNT, 10, 10, WHITE);
+    icon_rot(IC_COUNT, 10, 10, 0, 1, WHITE);
+    CHECK(cap_end() == 0);
+    ui_flip();
+}
+
+static void fx_checks(void)
+{
+    static const int areas[3][4] = {{SAFE_DEF_L, SAFE_DEF_T, SAFE_DEF_R, SAFE_DEF_B}, {160, 90, 1760, 990}, {0, 2, 1920, 1078}};
+    gfx_tex t8, t4;
+    u32 *p8 = gfx_tex_new(&t8, 64, 36, GFX_TEX_A8R8G8B8, 1);
+    u16 *p4 = gfx_tex_new(&t4, 5, 3, GFX_TEX_A4R4G4B4, 0);
+    CHECK(p8 && p4);
+    begin_frame();
+    cap_start();                                                  /* tex_sub: the rect and the UVs, in rect's order */
+    tex_sub(&t8, 10, 20, 300, 100, 0.25f, 0.5f, 0.75f, 1, 0x11223344);
+    CHECK(cap_end() == 4 && cap[0].x == 10 && cap[0].y == 20 && cap[1].x == 310 && cap[2].y == 120 && cap[3].x == 10);
+    CHECK(cap[0].u == 0.25f && cap[0].v == 0.5f && cap[2].u == 0.75f && cap[2].v == 1 && cap[1].rgba == 0x11223344);
+    for (int k = 0; k < 3; k++) {                                 /* the glass at the three areas: the UVs are the screen's */
+        float x = 40, y = 152, w = 1076, h = 440, u0, v0, u1, v1, ox, oy;
+        safe_l = areas[k][0], safe_t = areas[k][1], safe_r = areas[k][2], safe_b = areas[k][3];
+        safe_apply();
+        screen_origin(&ox, &oy);
+        glass_uv(x, y, w, h, &u0, &v0, &u1, &v1);
+        CHECK(near(u0, (x + areas[k][0]) / 1920, 1e-6f) && near(v1, (y + h + areas[k][1]) / 1080, 1e-6f));
+        cap_start();
+        tex_sub(&t8, x, y, w, h, u0, v0, u1, v1, WHITE);
+        CHECK(cap_end() == 4);
+        for (int i = 0; i < 4; i++) CHECK(near(cap[i].u * 1920, cap[i].x - ox, 0.01f) && near(cap[i].v * 1080, cap[i].y - oy, 0.01f));
+        cap_start();
+        tex_round(&t8, x, y, w, h, 20, u0, v0, u1, v1, WHITE);
+        CHECK(cap_end() == 38 && same(&cap[1], &cap[37]));       /* a closed fan: the centre and 36 points */
+        for (int i = 0; i < 38; i++) {
+            CHECK(near(cap[i].u * 1920, cap[i].x - ox, 0.01f) && near(cap[i].v * 1080, cap[i].y - oy, 0.01f));
+            CHECK(cap[i].x >= x && cap[i].x <= x + w && cap[i].y >= y && cap[i].y <= y + h);
+        }
+        float d = 300, su0, sv0, su1, sv1;                        /* a slide: the canvas d px right */
+        safe_l += (int)d, safe_r += (int)d;
+        safe_apply();
+        glass_uv(x, y, w, h, &su0, &sv0, &su1, &sv1);
+        CHECK(near(su0 - u0, d / 1920, 1e-6f) && near(su1 - u1, d / 1920, 1e-6f) && sv0 == v0 && sv1 == v1);
+    }
+    safe_l = SAFE_DEF_L, safe_t = SAFE_DEF_T, safe_r = SAFE_DEF_R, safe_b = SAFE_DEF_B;
+    safe_apply();
+    cap_start();                                                  /* a small radius: the 4-segment corners; none: tex_sub */
+    tex_round(&t8, 100, 100, 50, 30, 5, 0, 0, 1, 1, WHITE);
+    CHECK(cap_end() == 22);
+    cap_start();
+    tex_round(&t8, 100, 100, 50, 30, 0.5f, 0, 0, 1, 1, WHITE);
+    CHECK(cap_end() == 4 && cap[2].x == 150 && cap[2].y == 130);
+    /* glow9: 8 slices, each grid cell of the ring covered once, the rect and the outside never */
+    int gx = 200, gy = 100, gw = 120, gh = 80, pad = 24;
+    cap_start();
+    glow9(&t8, gx, gy, gw, gh, pad, WHITE);
+    CHECK(cap_end() == 32);
+    int bad = 0;
+    for (int py = gy - pad - 2; py < gy + gh + pad + 2; py++)
+        for (int px = gx - pad - 2; px < gx + gw + pad + 2; px++) {
+            float cx = px + 0.5f, cy = py + 0.5f;
+            int n = 0;
+            for (int q = 0; q < 8; q++)
+                n += cx > cap[4 * q].x && cx < cap[4 * q + 1].x && cy > cap[4 * q].y && cy < cap[4 * q + 2].y;
+            int outer = px >= gx - pad && px < gx + gw + pad && py >= gy - pad && py < gy + gh + pad;
+            int inner = px >= gx + pad && px < gx + gw - pad && py >= gy + pad && py < gy + gh - pad;
+            bad += n != (outer && !inner);
+        }
+    CHECK(bad == 0);
+    CHECK(cap[0].u == 0 && cap[1].u == 0.5f && cap[4].u == 0.5f && cap[5].u == 0.5f && cap[9].u == 1 && cap[22].v == 1);
+    cap_start();
+    glow9(&t8, 0, 0, 40, 30, 100, WHITE);                         /* pad over half the smaller side: 15 */
+    CHECK(cap_end() == 32 && cap[0].x == -15 && cap[0].y == -15);
+    cap_start();                                                  /* quad_rot at 0: tex_sub of the rect */
+    quad_rot(&t8, 500, 300, 64, 40, 0, 0.1f, 0.2f, 0.9f, 0.8f, 0xff8800ff);
+    CHECK(cap_end() == 4);
+    gfx_vtx r[4];
+    memcpy(r, cap, sizeof r);
+    cap_start();
+    tex_sub(&t8, 500 - 32, 300 - 20, 64, 40, 0.1f, 0.2f, 0.9f, 0.8f, 0xff8800ff);
+    CHECK(cap_end() == 4);
+    for (int k = 0; k < 4; k++) CHECK(same(&cap[k], &r[k]));
+    cap_start();                                                  /* a quarter turn clockwise: the top left corner goes right */
+    quad_rot(&t8, 500, 300, 64, 40, 1.5707963f, 0, 0, 1, 1, WHITE);
+    CHECK(cap_end() == 4 && near(cap[0].x, 520, 0.001f) && near(cap[0].y, 268, 0.001f) && near(cap[2].x, 480, 0.001f));
+    /* strip: a straight line, a right angle with its miter, the pieces of a long line */
+    float st[6] = {100, 100, 200, 100, 300, 100};
+    cap_start();
+    strip(st, 3, 4, WHITE);
+    CHECK(cap_end() == 6 && cap[0].x == 100 && cap[0].y == 98 && cap[1].y == 102 && cap[2].x == 200 && cap[2].y == 98 && cap[5].y == 102);
+    float rt[6] = {100, 100, 200, 100, 200, 200};
+    cap_start();
+    strip(rt, 3, 4, WHITE);
+    CHECK(cap_end() == 6 && near(cap[2].x, 202, 0.001f) && near(cap[2].y, 98, 0.001f) && near(cap[3].x, 198, 0.001f) && near(cap[3].y, 102, 0.001f));
+    CHECK(near(cap[4].x, 202, 0.001f) && near(cap[5].x, 198, 0.001f) && cap[4].y == 200);
+    float back[6] = {100, 100, 200, 100, 100, 100};                /* a turn back: no spike */
+    cap_start();
+    strip(back, 3, 4, WHITE);
+    CHECK(cap_end() == 6 && near(cap[2].x, 200, 2.001f) && fabsf(cap[2].y - 100) <= 4.001f);
+    static float lng[2 * 300];
+    for (int i = 0; i < 300; i++) lng[2 * i] = 10 + i * 6, lng[2 * i + 1] = 500 + (i % 7) * 3;
+    cap_start();
+    strip(lng, 300, 3, WHITE);
+    CHECK(cap_end() == 2 * (128 + 128 + 46));                    /* 300 points: pieces of 128, each from the last point before */
+    CHECK(same(&cap[254], &cap[256]) && same(&cap[255], &cap[257]) && same(&cap[510], &cap[512]) && same(&cap[511], &cap[513]));
+    cap_start();
+    strip(lng, 1, 3, WHITE);
+    strip(lng, 5, 0, WHITE);
+    area(lng, 1, 600, WHITE, 0);
+    CHECK(cap_end() == 0);
+    cap_start();
+    area(st, 3, 160, 0x6cb8ff40, 0x6cb8ff00);
+    CHECK(cap_end() == 6 && cap[0].y == 100 && cap[1].y == 160 && cap[4].x == 300 && cap[0].rgba == 0x6cb8ff40 && cap[1].rgba == 0x6cb8ff00);
+    ui_flip();
+    /* tex_upload: whole words of each row, from a source pitch, nothing past them */
+    static u32 src[7 * 36];
+    for (int i = 0; i < 7 * 36; i++) src[i] = 0x01000000u * (u32)(i & 0xff) + (u32)i;
+    for (int i = 0; i < t8.pitch / 4 * 36; i++) p8[i] = 0xdeadbeef;
+    t8.w = 5;                                                     /* a 5-texel row of the same memory */
+    tex_upload(&t8, p8, src, 7);
+    int up = 1;
+    for (int y = 0; y < 36; y++)
+        for (int x = 0; x < 16; x++) up &= p8[y * t8.pitch / 4 + x] == (x < 5 ? src[y * 7 + x] : 0xdeadbeef);
+    CHECK(up);
+    for (int i = 0; i < t4.pitch / 2 * 3; i++) p4[i] = 0xbeef;
+    tex_upload(&t4, p4, src, 7);                                  /* 5 texels of 16 bits: 3 words, 6 texels */
+    CHECK(((u32 *)p4)[2] == src[2] && ((u32 *)p4)[t4.pitch / 4 + 2] == src[9] && p4[6] == 0xbeef && p4[t4.pitch / 2 + 6] == 0xbeef);
+    tex_pair tp;                                                  /* tex_pair: the shown one and the written one take turns */
+    CHECK(tex_pair_new(&tp, 480, 270, GFX_TEX_A8R8G8B8, 1) == 0);
+    CHECK(tp.shown == 0 && tex_pair_shown(&tp) == &tp.tex[0] && tex_pair_wtex(&tp) == &tp.tex[1] && tex_pair_written(&tp) == tp.addr[1]);
+    CHECK(tp.addr[0] != tp.addr[1] && tp.tex[0].offset != tp.tex[1].offset && tp.tex[0].pitch == 1920 && tp.tex[1].linear == 1);
+    tex_pair_swap(&tp);
+    CHECK(tex_pair_shown(&tp) == &tp.tex[1] && tex_pair_written(&tp) == tp.addr[0] && tex_pair_wtex(&tp) == &tp.tex[0]);
+    tex_pair_swap(&tp);
+    CHECK(tex_pair_shown(&tp) == &tp.tex[0]);
+    CHECK(tex_pair_new(&tp, 0, 4, 0, 0) == -1);
+}
+
 int main(void)
 {
     int mk, op, wr;
@@ -229,7 +524,10 @@ int main(void)
     ui_stats(&st, 1);
     CHECK(st.frames == 9 && st.period_us == 16667 && st.wait_us == 0 && st.busy_us == 16667);
     CHECK(st.wait_sum_us == 0 && st.busy_sum_us == 9ull * 16667 && st.slow == 0 && st.vertices > 0);
-    utf8();                                                 /* last: the text stays UTF-8 */
+    utf8();                                                 /* the text stays UTF-8: the checks after it draw no text */
+    digit_checks();
+    icon_checks();
+    fx_checks();
 
     if (fails) {
         printf("kitcheck: %d checks failed\n", fails);

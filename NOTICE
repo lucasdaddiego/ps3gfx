@@ -1,7 +1,7 @@
 ps3gfx — third-party notices
 
 The library's own code is under the MIT License (LICENSE). The archive built
-from it (lib/libps3gfx.a) also contains data derived from the font below, and
+from it (lib/libps3gfx.a) also contains data derived from the fonts below, and
 the sources compile against the headers of the first project.
 
 1. PSL1GHT, https://github.com/ps3dev/PSL1GHT, commit 6e565a7. The library
@@ -31,13 +31,21 @@ the sources compile against the headers of the first project.
    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
    THE SOFTWARE.
 
-2. The on-screen fonts (data/fonts.bin) are bitmaps that art/make_font.py
-   renders from Inter, Copyright (c) 2016 The Inter Project Authors
-   (https://github.com/rsms/inter), SIL Open Font License 1.1. As a modified
-   version of that font they stay under the OFL; the license text is OFL.txt
-   here (make install copies it to share/ps3gfx/), and every pkg that links
-   the archive ships it as USRDIR/OFL.txt.
+2. The on-screen fonts (data/fonts.bin, data/latin.bin, data/digits.bin)
+   are bitmaps that art/make_font.py renders from Inter, Copyright (c) 2016
+   The Inter Project Authors (https://github.com/rsms/inter), SIL Open Font
+   License 1.1. As a modified version of that font they stay under the OFL;
+   the license text is OFL.txt here (make install copies it to
+   share/ps3gfx/), and every pkg that links the archive ships it as
+   USRDIR/OFL.txt.
 
 3. RPCS3 (https://github.com/RPCS3/rpcs3) was the reference for how libgcm
    and the RSX read the command words (source/gfx/README.md). No code of
    RPCS3 is part of this library.
+
+4. The icons (data/icons.bin) are bitmaps that art/make_icons.py renders
+   from Phosphor Icons 2.1.1 (the npm package @phosphor-icons/web@2.1.1,
+   https://github.com/phosphor-icons/homepage), Copyright (c) 2020-2021
+   Phosphor Icons, MIT License. The license text is LICENSES/PHOSPHOR.txt
+   (make install copies it to share/ps3gfx/), and every pkg whose app calls
+   icons_init ships it as USRDIR/PHOSPHOR.txt.

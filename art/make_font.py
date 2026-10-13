@@ -34,6 +34,22 @@ the euro, OE, S and Z with caron, Y with diaeresis ...; not the per mille
 sign, the widest glyph), the primes, the minus and a white square for code
 points the atlases do not have. U+00AD
 (the soft hyphen) is a blank cell, as 127 is in fonts.bin.
+
+    python3 art/make_font.py --digits <Inter[opsz,wght].ttf> [preview.png]
+
+writes only data/digits.bin: the display digits of source/digits.c (an app
+links them only when it calls digits_init), three big sizes (DIGIT_STYLES)
+of 17 glyphs each: 0..9, tabular (one advance, the glyph centred in it), then
+: , . - + % and the degree sign. The '-' slot draws U+2212 (the minus sign,
+the width of the plus). The same blocks as latin.bin, with a 'mid' row:
+    'PHD1', u16 font count, u16 glyph count, u16 atlas columns, u16 0,
+    u16 code point[glyph count], in slot order; zero bytes to a multiple of 4;
+    then per font: u16 cell w, cell h, baseline, left pad, ascent, line
+    height, atlas w, atlas h, mid, 0; u8 advance[glyph count]; zero bytes to
+    a multiple of 4; the atlas as in fonts.bin; zero bytes to a multiple of 4.
+mid is the cell row of the middle of the digits' ink (between the top of the
+tallest digit and the bottom of the lowest): digits_half splits a glyph
+there, the line of a flip card.
 """
 import math, os, struct, sys
 from PIL import Image, ImageDraw, ImageFont
@@ -49,15 +65,28 @@ def load(ttf, px, weight):
     f.set_variation_by_axes([min(32, max(14, px)), weight])
     return f
 
+# the display digits: name, pixel size, weight. The order is the D_* enum in source/digits.h.
+DIGIT_STYLES = [('d_m', 84, 600), ('d_l', 112, 560), ('d_xl', 168, 500)]
+DIGITS = '0123456789:,.-+%\u00b0'            # the code points an app writes, in slot order
+DIGIT_COLS = 9
+
 LATIN = ([chr(c) for c in range(0xA0, 0x100)] + list('\u20ac\u201a\u0192\u201e\u2026\u2020\u2021\u02c6\u0160\u2039\u0152'
          '\u017d\u2018\u2019\u201c\u201d\u2022\u2013\u2014\u02dc\u2122\u0161\u203a\u0153\u017e\u0178'
          '\u2032\u2033\u2212\u25a1'))
 LATIN.sort()
 
-def build(ttf, px, weight, latin=False):
+def build(ttf, px, weight, latin=False, digits=False):
     f = load(ttf, px, weight)
     asc, desc = f.getmetrics()
-    if latin:                                  # slot i draws LATIN[i]; the soft hyphen is blank
+    if digits:                                 # slot i draws DIGITS[i]; the digits are tabular, '-' is the minus sign
+        glyph = ['\u2212' if g == '-' else g for g in DIGITS]
+        adv = [round(f.getlength(g)) for g in glyph]
+        off = [0] * len(glyph)
+        dmax = max(round(f.getlength(d)) for d in '0123456789')
+        for i in range(10):
+            off[i] = round((dmax - f.getlength(glyph[i])) / 2)
+            adv[i] = dmax
+    elif latin:                                  # slot i draws LATIN[i]; the soft hyphen is blank
         glyph = [' ' if g == '\u00ad' else g for g in LATIN]
         adv = [round(f.getlength(g)) for g in glyph]
         adv[LATIN.index('\u00ad')] = 0
@@ -81,13 +110,18 @@ def build(ttf, px, weight, latin=False):
     cw += cw & 1                               # even: the atlas pitch is a multiple of 64 bytes
     base = 1 - math.floor(top)
     ch = base + math.ceil(bottom) + 1
-    rows = (len(glyph) + COLS - 1) // COLS
-    atlas = Image.new('L', (COLS * cw, rows * ch), 0)
+    cols = DIGIT_COLS if digits else COLS
+    rows = (len(glyph) + cols - 1) // cols
+    atlas = Image.new('L', (cols * cw, rows * ch), 0)
     d = ImageDraw.Draw(atlas)
     for i, g in enumerate(glyph):
-        x, y = (i % COLS) * cw, (i // COLS) * ch
+        x, y = (i % cols) * cw, (i // cols) * ch
         d.text((x + pad + off[i], y + base), g, font=f, fill=255, anchor='ls')
-    return dict(cw=cw, ch=ch, base=base, pad=pad, asc=asc, line=asc + desc, adv=adv, atlas=atlas)
+    ft = dict(cw=cw, ch=ch, base=base, pad=pad, asc=asc, line=asc + desc, adv=adv, atlas=atlas)
+    if digits:                                 # the middle of the digits' ink, as a cell row
+        boxes = [f.getbbox(g, anchor='ls') for g in '0123456789']
+        ft['mid'] = base + math.floor((min(b[1] for b in boxes) + max(b[3] for b in boxes)) / 2 + 0.5)
+    return ft
 
 def pack(fonts, latin=False):
     if latin:
@@ -106,6 +140,50 @@ def pack(fonts, latin=False):
         out += bytes((q[i] << 4) | q[i + 1] for i in range(0, len(q), 2))
         out += bytes(-len(out) % 4)
     return bytes(out)
+
+def pack_digits(fonts):
+    out = bytearray(b'PHD1' + struct.pack('>HHHH', len(fonts), len(DIGITS), DIGIT_COLS, 0))
+    out += b''.join(struct.pack('>H', ord(g)) for g in DIGITS)
+    out += bytes(-len(out) % 4)
+    for ft in fonts:
+        a = ft['atlas']
+        out += struct.pack('>10H', ft['cw'], ft['ch'], ft['base'], ft['pad'], ft['asc'], ft['line'], a.width, a.height,
+                           ft['mid'], 0)
+        out += bytes(ft['adv'])
+        out += bytes(-len(out) % 4)
+        px = a.tobytes()
+        q = [min(15, round(((v / 255) ** GAMMA) * 15)) for v in px]
+        out += bytes((q[i] << 4) | q[i + 1] for i in range(0, len(q), 2))
+        out += bytes(-len(out) % 4)
+    return bytes(out)
+
+def digits_main(ttf, png):
+    here = os.path.dirname(os.path.abspath(__file__))
+    fonts = [build(ttf, px, w, digits=True) for _, px, w in DIGIT_STYLES]
+    for ft in fonts:                           # two texels a byte, and rows of whole bytes
+        assert ft['atlas'].width % 2 == 0
+    data = pack_digits(fonts)
+    out = os.path.join(here, '..', 'data', 'digits.bin')
+    open(out, 'wb').write(data)
+    for (name, px, w), ft in zip(DIGIT_STYLES, fonts):
+        a = ft['atlas']
+        pitch = (a.width * 2 + 63) // 64 * 64
+        print(f"{name:5} {px:3} px w{w}: cell {ft['cw']}x{ft['ch']}, base {ft['base']}, mid {ft['mid']}, line {ft['line']}, "
+              f"atlas {a.width}x{a.height} ({pitch * a.height} B of RSX memory as A4R4G4B4)")
+    print(os.path.relpath(out, os.path.join(here, '..')), len(data), 'bytes,', len(DIGITS), 'glyphs')
+    if png:
+        sheet = Image.new('RGB', (1920, sum(ft['line'] + 20 for ft in fonts) + 40), (12, 18, 34))
+        y = 20
+        for ft in fonts:
+            x = 40
+            for i, g in enumerate(DIGITS + DIGITS[:10]):
+                k = i % len(DIGITS)
+                cx, cy = (k % DIGIT_COLS) * ft['cw'], (k // DIGIT_COLS) * ft['ch']
+                cell = ft['atlas'].crop((cx, cy, cx + ft['cw'], cy + ft['ch']))
+                sheet.paste((242, 245, 250), (x - ft['pad'], y + ft['asc'] - ft['base']), cell)
+                x += ft['adv'][k]
+            y += ft['line'] + 20
+        sheet.save(png)
 
 def unpack(data):
     """Read fonts.bin back the way source/ui.c does."""
@@ -152,6 +230,9 @@ def preview(fonts, path):
     img.save(path)
 
 if __name__ == '__main__':
+    if len(sys.argv) in (3, 4) and sys.argv[1] == '--digits':
+        digits_main(sys.argv[2], sys.argv[3] if len(sys.argv) == 4 else None)
+        sys.exit(0)
     if len(sys.argv) not in (2, 3):
         sys.exit(__doc__)
     data = pack([build(sys.argv[1], px, w) for _, px, w in STYLES])

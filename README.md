@@ -69,6 +69,30 @@ the memory layout, the source of each RSX word and the shader recipe):
   `spu_kit_ls_march`, `spu_kit_ls_addr` and `spu_kit_ls_got`; the accessors `SPU_KIT_RD` and `SPU_KIT_WR`)
 - `spu_kit_spu`, `spu_kit_spu_size`: the program, a member of the archive (PPU and host only)
 
+`<ps3gfx/digits.h>`, the display digits (`digits.c` with `digits.bin`, linked only by an app that calls
+`digits_init`: 1,945,472 B of RSX memory, 479,584 B of data in the ELF):
+- `D_M`, `D_L`, `D_XL` (84, 112 and 168 px of Inter), `D_COUNT`
+- `digits_init`, `digits`, `digits_r`, `digits_w`, `digits_h`, `digits_half` (a flip card's half, from the middle
+  line, with a y scale), `digits_mid` (that line). The glyphs: 0 to 9 tabular, `: , . - + %` and the degree sign
+  (UTF-8 C2 B0 or the byte B0); `-` draws the minus sign.
+
+`<ps3gfx/icons.h>` and `<ps3gfx/icons_ids.h>`, the icons (`icons.c` with `icons.bin`, linked only by an app that
+calls `icons_init`: 753,792 B of RSX memory, 184,516 B of data in the ELF): Phosphor Icons 2.1.1 (MIT)
+- `icons_init`, `icon` (centred, on a whole pixel), `icon_rot` (turned and scaled about the centre), `icon_size`
+- the ids `IC_S_*` (32 px bold: caret-up, caret-down, minus, drop, clock, wifi-high, wifi-slash,
+  currency-dollar, newspaper, info, warning, arrows-clockwise, wind, sun-horizon, thermometer-simple, umbrella),
+  `IC_M_*_FILL` and `IC_M_*_LINE` (64 px duotone: sun, moon-stars, cloud-sun, cloud-moon, cloud, cloud-fog,
+  cloud-rain, cloud-snow, cloud-lightning), `IC_L_*_FILL` and `IC_L_*_LINE` (168 px duotone, always bilinear: sun,
+  moon, cloud, lightning, snowflake), `IC_COUNT`
+
+`<ps3gfx/fx.h>`, drawing helpers on the public gfx API (`fx.c`, linked only by an app that calls one):
+- `tex_sub` (a part of a texture into a rect), `tex_round` (the same in a rounded rect, the outline of
+  `round_rect`), `glass_uv` (the UVs of a canvas rect in a texture that covers the screen), `glow9` (a
+  9-slice halo around a rect), `quad_rot` (a turned textured quad), `strip` (a polyline with mitred joins),
+  `area` (the fill under it), `tex_upload` (main memory into a texture in 32-bit stores)
+- `tex_pair`, `tex_pair_new`, `tex_pair_shown`, `tex_pair_wtex`, `tex_pair_written`, `tex_pair_swap`: two
+  textures that take turns (the frame draws one while a writer, an SPU by DMA, fills the other)
+
 Every name is PS3 Health's, except the additions of 2026-10-09 for Cell
 Bench: the `format` field of `gfx_tex` with A8R8G8B8 (an 8-bit picture
 needs no dither), `wrap_step` and `screen_origin`, and a journal table of 64
@@ -100,6 +124,16 @@ library builds unchanged. The additions of 2026-10-10:
 The addition of 2026-10-11: the SPU kit (`<ps3gfx/spu_kit.h>`,
 `spu_kit_spu`), for PS3 Health's Cooling load and local-store test.
 
+The additions of 2026-10-13, for Couch 0.3.0 (stages 1 to 3 of its design):
+the display digits (`<ps3gfx/digits.h>`), the icons (`<ps3gfx/icons.h>`)
+and the drawing helpers (`<ps3gfx/fx.h>`). Each is a new source file, an
+archive member of its own, and its data is a member that only that file
+references: an app that calls none of them links none of them, and PS3
+Health's and Cell Bench's ELFs stay byte-identical. The atlases bind as the
+fonts do (nearest at 1080p), except the L icons, which always bind bilinear
+because they turn and scale; their texels are white also at alpha 0, so a
+bilinear sample mixes no black into the edges.
+
 ## The runtime pin
 
 The archive is built with the toolchain PS3 Health runs on: the ps3dev
@@ -122,10 +156,11 @@ make clean
 ```
 
 The Makefile is PSL1GHT's app Makefile cut to an archive: `SOURCES := source
-source/gfx`, `DATA := data` (bin2o makes `fonts.bin` and `latin.bin` members
-of the archive with the symbols `fonts_bin`, `fonts_bin_end`, `fonts_bin_size`
-and the same for `latin_bin`; `ui.o` and `text_utf8.o` depend on them for
-their headers; its own rule makes `spu_kit.spu` the member `spu_kit.spu.o`
+source/gfx`, `DATA := data` (bin2o makes `fonts.bin`, `latin.bin`,
+`digits.bin` and `icons.bin` members of the archive with the symbols
+`fonts_bin`, `fonts_bin_end`, `fonts_bin_size` and the same for the others;
+`ui.o`, `text_utf8.o`, `digits.o` and `icons.o` depend on them for their
+headers; its own rule makes `spu_kit.spu` the member `spu_kit.spu.o`
 with `bin2s -a 128`, the SPU kit), and `CFLAGS = -O2 -Wall -mcpu=cell
 $(MACHDEP) $(INCLUDE)`, PS3 Health 2.0.1's flags, so the code is the
 console-tested one. It errors when `PSL1GHT` or `PS3DEV` is unset (ppu_rules
@@ -136,8 +171,8 @@ smaller sizes still work there.
 
 `make install` copies, into `$PS3DEV/portlibs/ppu`:
 - `lib/libps3gfx.a`;
-- `include/ps3gfx/gfx.h`, `ui.h`, `fs.h`, `journal.h`, `spu_kit.h`;
-- `share/ps3gfx/OFL.txt`;
+- `include/ps3gfx/gfx.h`, `ui.h`, `fs.h`, `journal.h`, `spu_kit.h`, `digits.h`, `icons.h`, `icons_ids.h`, `fx.h`;
+- `share/ps3gfx/OFL.txt` and `share/ps3gfx/PHOSPHOR.txt`;
 - `share/ps3gfx/COMMIT`: the full commit id of the checkout, `-dirty` when
   tracked files changed, `unknown` outside a git repository. An app's
   `build.sh` compares it with the commit its `sdk_setup.sh` pins: one
@@ -188,7 +223,9 @@ Two conventions of the kit are in its texts: SQUARE twice on the home screen
 clears the journal (`gesture(BTN_SQUARE)`, then `journal_clear()`), and
 "Hold the power button, then start the app again: it skips the frozen step."
 An app adopts both. Every pkg that links the archive ships `OFL.txt` as
-`USRDIR/OFL.txt` (the fonts are a modified Inter: NOTICE item 2). The kit's
+`USRDIR/OFL.txt` (the fonts are a modified Inter: NOTICE item 2), and a pkg
+whose app calls `icons_init` ships `PHOSPHOR.txt` as `USRDIR/PHOSPHOR.txt`
+(the icons are a rendering of Phosphor: NOTICE item 4). The kit's
 globals have short names (`text`, `line`, `title`, `quit`, `SW`, `SH`): an
 app with a global of the same name gets a duplicate-symbol link error, never
 a silent bug.
@@ -311,8 +348,9 @@ weak symbols: an app's `tools/preview/pv_app.c` defines the strong
 end, the gfx traces (`PV_GFXTRACE`), `diff.py` and the pad scripts.
 `tools/preview/smoke/` is the smallest app, for CI. On the host an app
 includes `<ps3gfx/ui.h>` as on the console: `tools/preview/stub/ps3gfx/`
-holds five forwarders to the checkout's own headers, so the preview builds
-against the sources it previews, never against the installed copy.
+holds a forwarder to the checkout's own header for each of the nine public
+headers, so the preview builds against the sources it previews, never
+against the installed copy.
 
 ## Tests
 
@@ -345,6 +383,22 @@ against the sources it previews, never against the installed copy.
   the cut sequences and the text_fit and text_wrap breaks on whole code points
   (16,667 us a frame, all of it in gfx_end; with ui_submit all of it busy, counted in the next begin_frame).
   It exits 1 on a failed check.
+- kitcheck also checks the display digits, the icons and `fx.h` on the vertices each call writes (a mark
+  before and after a call holds them in the frame's vertex area): the tabular advance and each glyph's width,
+  the two halves of `digits_half` at scale 1 against the whole glyph (and the middle line's texel row), every
+  icon id's cell and its centre, `icon_rot` at no turn against `icon`, the UVs of `tex_sub`, `tex_round` and
+  `glass_uv` at the default, the narrow and the TV area and after a slide of the canvas, the slices of `glow9`
+  (each pixel of the halo once, the rect and the outside never), `quad_rot` at 0 against `tex_sub`, the
+  miters and the pieces of `strip`, `area`, `tex_upload` and `tex_pair`. It prints the RSX memory of
+  `digits_init` and `icons_init`.
+- The smoke app's pages (CI, R1): frosted glass over a picture with a halo, a curve and a turned quad; the
+  display digits with a flip card at four phases; every icon. CI takes each snapshot twice and compares the
+  bytes.
+- The atlases: `art/make_font.py --digits <InterVariable.ttf>` writes `data/digits.bin` and
+  `art/make_icons.py <folder>` writes `data/icons.bin` and `source/icons_ids.h` from
+  `Phosphor-Bold.ttf` and `Phosphor-Duotone.ttf` (`@phosphor-icons/web@2.1.1`, sha256 checked; ps3sdk keeps
+  them in `fonts/`). Both give the committed bytes with the ps3dev venv's Pillow 12.3.0 (FreeType 2.14.3). CI
+  does not rebuild them: ps3sdk is private, and another Pillow or FreeType may rasterize differently.
 - `tools/preview/smoke/check_tex8.py` (CI): the smoke app draws a 4 x 4
   A8R8G8B8 texture 64 px a texel, and each texel's colour must fill its block
   in the snapshot (the preview's 8-bit texture path).
@@ -421,8 +475,11 @@ is one file.
   the first UI of PS3 Health.
 - The on-screen text uses [Inter](https://github.com/rsms/inter)
   (SIL Open Font License): bitmap atlases made by `art/make_font.py`.
+- The icons are [Phosphor Icons](https://github.com/phosphor-icons/homepage)
+  2.1.1 (MIT): bitmap atlases made by `art/make_icons.py`.
 
 ## License
 
 MIT, see [LICENSE](LICENSE). Third-party notices: [NOTICE](NOTICE). The font
-license every pkg ships: [OFL.txt](OFL.txt).
+license every pkg ships: [OFL.txt](OFL.txt). The icon license a pkg with the
+icons ships: [LICENSES/PHOSPHOR.txt](LICENSES/PHOSPHOR.txt).

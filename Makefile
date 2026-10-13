@@ -18,8 +18,9 @@ include $(PSL1GHT)/ppu_rules
 # BUILD is the directory where object files & intermediate files will be placed
 # SOURCES is a list of directories containing source code
 # INCLUDES is a list of directories containing extra header files
-# DATA holds fonts.bin and latin.bin: bin2o makes each a member of the archive
-# (fonts_bin, latin_bin). It also holds spu_kit.spu, the SPU kit's program
+# DATA holds fonts.bin, latin.bin, digits.bin and icons.bin: bin2o makes each
+# a member of the archive (fonts_bin, latin_bin, digits_bin, icons_bin). It
+# also holds spu_kit.spu, the SPU kit's program
 # (spu/Makefile builds it, the file is committed): the member spu_kit.spu.o,
 # from its own rule below
 #---------------------------------------------------------------------------------
@@ -84,8 +85,9 @@ clean:
 	@$(MAKE) --no-print-directory -C spu clean
 
 #---------------------------------------------------------------------------------
-# install: the archive, the five public headers as <ps3gfx/*.h>, OFL.txt (every
-# pkg that links the archive ships it as USRDIR/OFL.txt) and COMMIT, the full
+# install: the archive, the public headers as <ps3gfx/*.h>, OFL.txt (every
+# pkg that links the archive ships it as USRDIR/OFL.txt), PHOSPHOR.txt (every
+# pkg that links icons.bin ships it as USRDIR/PHOSPHOR.txt) and COMMIT, the full
 # commit id of this checkout, -dirty when tracked files changed, unknown
 # outside a git repository. An app's build.sh compares COMMIT with its pin.
 #---------------------------------------------------------------------------------
@@ -93,7 +95,8 @@ install: $(BUILD)
 	@mkdir -p $(PORTLIBS)/lib $(PORTLIBS)/include/ps3gfx $(PORTLIBS)/share/ps3gfx
 	@cp lib/lib$(TARGET).a $(PORTLIBS)/lib/
 	@cp source/gfx/gfx.h source/ui.h source/fs.h source/journal.h source/spu_kit.h $(PORTLIBS)/include/ps3gfx/
-	@cp OFL.txt $(PORTLIBS)/share/ps3gfx/
+	@cp source/digits.h source/icons.h source/icons_ids.h source/fx.h $(PORTLIBS)/include/ps3gfx/
+	@cp OFL.txt LICENSES/PHOSPHOR.txt $(PORTLIBS)/share/ps3gfx/
 	@rev=$$(git rev-parse HEAD 2>/dev/null) && { git diff --quiet HEAD 2>/dev/null || rev=$$rev-dirty; } || rev=unknown; \
 		echo $$rev > $(PORTLIBS)/share/ps3gfx/COMMIT
 	@echo "ps3gfx $$(cat $(PORTLIBS)/share/ps3gfx/COMMIT) installed in $(PORTLIBS)"
@@ -109,9 +112,11 @@ DEPENDS	:=	$(OFILES:.o=.d)
 $(OUTPUT).a:	$(OFILES)
 
 # ui.c includes fonts_bin.h, which the bin2o rule writes next to fonts.bin.o;
-# text_utf8.c includes latin_bin.h
+# text_utf8.c includes latin_bin.h, digits.c digits_bin.h, icons.c icons_bin.h
 ui.o: fonts.bin.o
 text_utf8.o: latin.bin.o
+digits.o: digits.bin.o
+icons.o: icons.bin.o
 
 #---------------------------------------------------------------------------------
 # This rule links in binary data with the .bin extension

@@ -14,7 +14,7 @@ APP=${APP:A}
 [[ -d $APP/source ]] || { print -u2 "no $APP/source"; exit 2 }
 O=$APP/tools/preview/build
 mkdir -p $O
-for bin in fonts latin; do                    # data/*.bin as C arrays, the symbols of bin2o
+for bin in fonts latin digits icons; do      # data/*.bin as C arrays, the symbols of bin2o
 python3 -I - "$L/data/$bin.bin" "$O/${bin}_bin.c" $bin <<'PY'
 import sys
 d, n = open(sys.argv[1], 'rb').read(), sys.argv[3]
@@ -34,5 +34,5 @@ $CC -Dgfx_init=gfx_real_init -Dgfx_viewport=gfx_real_viewport -Dgfx_begin=gfx_re
 # (N): an app without a tools/preview/*.c of its own builds too
 $CC -o "$O/pv" "$APP"/source/*.c "$APP"/tools/preview/*.c(N) "$L"/source/*.c \
     "$L/tools/preview/stubs.c" "$L/tools/preview/gfx_soft.c" "$L/tools/preview/gfx_trace.c" "$L/tools/preview/raster.c" \
-    "$O/fonts_bin.c" "$O/latin_bin.c" "$O/gfx.o" -lm -lpthread
+    "$O/fonts_bin.c" "$O/latin_bin.c" "$O/digits_bin.c" "$O/icons_bin.c" "$O/gfx.o" -lm -lpthread
 print "built $O/pv"
