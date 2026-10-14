@@ -95,7 +95,9 @@ An app's preview twin runs a job at once with an fx_io that copies into its text
 
 `<ps3gfx/icons.h>` and `<ps3gfx/icons_ids.h>`, the icons (`icons.c` with `icons.bin`, linked only by an app that
 calls `icons_init`: 753,792 B of RSX memory, 184,516 B of data in the ELF): Phosphor Icons 2.1.1 (MIT)
-- `icons_init`, `icon` (centred, on a whole pixel), `icon_rot` (turned and scaled about the centre), `icon_size`
+- `icons_init`, `icon` (centred, on a whole pixel), `icon_rot` (turned and scaled about the centre, no snap, always
+  bilinear: an S or M icon that moves by fractions of a pixel too, through a second `gfx_tex` of its set's
+  texels with no new RSX memory), `icon_size`
 - the ids `IC_S_*` (32 px bold: caret-up, caret-down, minus, drop, clock, wifi-high, wifi-slash,
   currency-dollar, newspaper, info, warning, arrows-clockwise, wind, sun-horizon, thermometer-simple, umbrella),
   `IC_M_*_FILL` and `IC_M_*_LINE` (64 px duotone: sun, moon-stars, cloud-sun, cloud-moon, cloud, cloud-fog,
@@ -399,11 +401,17 @@ The modes:
 - `FX_SKY` (10): the clouds, 480 x 270 A8R8G8B8 (`out`), and the frosted
   glass, 240 x 135 (`out2`), for the rows [y0, y1) and the glass rows
   [y0 / 2, y1 / 2) (five bands of 54 rows: `fx_band`). A cloud pixel: a
-  warp, then three octaves of value noise from a 64 x 64 lattice whose cells
-  hold their four corners in one word (four table reads a pixel), the
-  coverage as a soft band centred on the cover's quantile, the light (thick
-  cores darker, the sun's side lighter, a flash), the edge colour on thin
-  cloud. Every texel has the cloud's colour, also where the alpha is 0
+  warp, then five octaves of value noise from a 64 x 64 lattice whose cells
+  hold their four corners in one word (six table reads a pixel), the fine
+  octaves heavier than a 1/2 falloff (`FX_CLOUD_W1` to `W5`: 0.46, 0.25,
+  0.15, 0.09, 0.05), the coverage as a band 0.085 wide (`FX_CLOUD_BAND`)
+  centred on the cover's quantile (`FX_CLOUD_MID`, which `test_spu_fx
+  --quantiles` measures), the light (thick cores darker over
+  `FX_CLOUD_THICK`, the two finest octaves shading the inside by
+  `FX_CLOUD_TEX`, the sun's side lighter, a flash), the edge colour on thin
+  cloud. Until 2026-10-14 three octaves (0.55, 0.30, 0.15) and a band 0.16
+  wide: on Couch's TV the clouds read as soft blobs (Lucas: "the background
+  is too blurry"). Every texel has the cloud's colour, also where the alpha is 0
   (bilinear filtering mixes RGB without premultiplied alpha), and an alpha
   under 0x30 is an ordered 4 x 4 dither to multiples of 0x10 (its mean is the
   alpha; ps3gfx's alpha test drops texels under 0x10). The glass: the sky's
@@ -446,18 +454,19 @@ be `FX_KAT`, or the app keeps the SPUs off.
 function); `make -C spu/fx update` copies the program to `data/spu_fx.spu`.
 The flags are the kit's (no libm: sin and exp are polynomials).
 
-This build (spu-gcc 7.2.0): text 22,104 bytes, data 784 (newlib's), bss
-116,240, `data/spu_fx.spu` 24,600 bytes. The local store:
+This build (spu-gcc 7.2.0, the five-octave clouds of 2026-10-14): text
+24,240 bytes, data 816 (newlib's), bss 116,240, `data/spu_fx.spu` 26,136
+bytes. The local store:
 
 | Address | Size | What |
 |---|---|---|
-| 0x00000 | 23,600 B | the code, the constants, newlib's data |
-| 0x05d00 | 74,752 B | one union of the jobs' buffers: the sky's (two rows, the horizontal passes, the glass band 3 x 45 x 240 x 16 bits), the aurora's (the curtains per column, two rows), the rain's two quad buffers |
-| 0x18100 | 24,704 B | the rain's particles and splashes (kept between jobs) |
-| 0x1e180 | 16,384 B | the noise table |
-| 0x22180 | 256 B | the control block, the report |
-| 0x22290 | | `_end` (CI: at most 0x28000); 105,840 B free under 0x3c000 |
-| 0x3c000 | 16 KB | the stack; the deepest call is about 2.9 KB (main 1,280 B, the sky job 1,600 B) |
+| 0x00000 | 25,344 B | the code, the constants, newlib's data |
+| 0x06300 | 74,752 B | one union of the jobs' buffers: the sky's (two rows, the horizontal passes, the glass band 3 x 45 x 240 x 16 bits), the aurora's (the curtains per column, two rows), the rain's two quad buffers |
+| 0x18700 | 24,704 B | the rain's particles and splashes (kept between jobs) |
+| 0x1e780 | 16,384 B | the noise table |
+| 0x22780 | 256 B | the control block, the report |
+| 0x22890 | | `_end` (CI: at most 0x28000); 104,304 B free under 0x3c000 |
+| 0x3c000 | 16 KB | the stack; the deepest call is about 3 KB (main 1,280 B, the sky job 1,664 B) |
 
 The cost on the SPU is an estimate: the instructions of each inner loop
 (spu-objdump), even and odd pipes counted apart, one cycle per instruction
@@ -465,20 +474,21 @@ of the busier pipe (no stalls), at 3.2 GHz:
 
 | Job | Per pixel or quad | One SPU's share of a picture | Design |
 |---|---|---|---|
-| FX_SKY: the clouds | 72 cycles | 54 rows: 1.87 M cycles | |
-| FX_SKY: the glass source | 72 cycles | 45 rows of 240: 0.78 M | |
+| FX_SKY: the clouds | 84 cycles (72 with three octaves) | 54 rows: 2.18 M cycles | |
+| FX_SKY: the glass source | 80 cycles (72) | 45 rows of 240: 0.86 M | |
 | FX_SKY: the blur and the glass rows | | 0.67 M | |
-| FX_SKY, all | | 3.3 M = 1.04 ms (1.3 to 1.5 ms with stalls) | 0.6 ms |
+| FX_SKY, all | | 3.7 M = 1.16 ms (three octaves: 3.3 M, 1.04 ms) | 0.6 ms |
 | FX_AURORA | 41 cycles | 72 rows: 1.97 M = 0.62 ms (0.8 ms with stalls) | 1.2 to 1.4 ms |
 | FX_RAIN | about 140 cycles a quad, 50 more for the sum | 1,540 quads: 0.3 M = 0.09 ms | 0.03 to 0.05 ms |
 
-At 30 pictures a second, the sky keeps each of five SPUs 3 to 5 % busy (the
-design: 2 %); a picture still takes under 2 ms of the 33 ms it may take.
-Most of the sky's even-pipe work is the noise's arithmetic and the float
-constants that spu-gcc builds again in each loop. On the host (Apple M4, one
-thread, the plain lanes): a sky picture 2.7 ms, an aurora picture 2.0 ms, a
-rain job 0.007 ms. No console has run the program yet: Couch 0.3.0's round
-measures every job's ticks.
+The console measured the three-octave sky (Couch, 2026-10-14): 1.97 ms a
+picture on the slowest SPU, 1.9 times this estimate (the stalls). The same
+factor gives the five-octave sky about 2.2 ms: at Couch's 60 pictures a
+second about 13 % of each of five SPUs (three octaves: 12 %). Most of the
+sky's even-pipe work is the noise's arithmetic and the float constants that
+spu-gcc builds again in each loop. On the host (Apple M4, one thread, the
+plain lanes): a sky picture 3.2 ms (three octaves: 2.9 ms), an aurora
+picture 2.0 ms, a rain job 0.007 ms.
 
 ## The preview on the host
 
@@ -533,7 +543,8 @@ against the installed copy.
   the jobs' refusals, and that a driver waits for a buffer before it fills it again:
   `cc -std=c99 -O2 -Wall -Wextra -ffp-contract=off -I source -I source/gfx -I tools/preview/stub test/test_spu_fx.c -lm`.
   `--golden` checks the pictures' hashes (the same on arm64 and x86-64 with clang 21; CI does not run it),
-  `--out DIR` writes the reference pictures as PPM, `--bench` times the jobs on the host.
+  `--out DIR` writes the reference pictures as PPM, `--bench` times the jobs on the host, `--quantiles`
+  prints the cloud value's quantiles every 10 % (the table `FX_CLOUD_MID` of the coverage).
 - `tools/preview/kitcheck/` (CI): an app for the host only that calls the kit
   on the preview and checks the results against the rules of the headers:
   text_wrap_lines against text_wrap (5,250 cases), the va_list calls against the variadic ones (also past the
@@ -546,7 +557,7 @@ against the installed copy.
 - kitcheck also checks the display digits, the icons and `fx.h` on the vertices each call writes (a mark
   before and after a call holds them in the frame's vertex area): the tabular advance and each glyph's width,
   the two halves of `digits_half` at scale 1 against the whole glyph (and the middle line's texel row), every
-  icon id's cell and its centre, `icon_rot` at no turn against `icon`, the UVs of `tex_sub`, `tex_round` and
+  icon id's cell and its centre, `icon_rot` at no turn against `icon` and at a fractional centre (no snap), the UVs of `tex_sub`, `tex_round` and
   `glass_uv` at the default, the narrow and the TV area and after a slide of the canvas, the slices of `glow9`
   (each pixel of the halo once, the rect and the outside never), `quad_rot` at 0 against `tex_sub`, the
   miters and the pieces of `strip`, `area`, the anti-aliased helpers (each one's quads, the ink's extent, the

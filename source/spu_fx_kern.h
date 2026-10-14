@@ -294,6 +294,19 @@ typedef struct {
 } fx_sky_k;
 
 #define FX_CLOUD_CELL 80.0f                  /* picture pixels per lattice cell, octave 1 */
+/* The octaves' weights (sum 1), the coverage band's width in n, the
+ * thickness over which the light falls, the finest octaves' shading, and
+ * the band's centre for cover 0 %, 10 %, ... 100 % (the quantiles of n that
+ * test_spu_fx --quantiles measures; the ends sit past every sample). */
+#define FX_CLOUD_W1 0.46f
+#define FX_CLOUD_W2 0.25f
+#define FX_CLOUD_W3 0.15f
+#define FX_CLOUD_W4 0.09f
+#define FX_CLOUD_W5 0.05f
+#define FX_CLOUD_BAND 0.085f
+#define FX_CLOUD_THICK 0.30f
+#define FX_CLOUD_TEX 0.45f
+#define FX_CLOUD_MID {1.06f, 0.654f, 0.601f, 0.561f, 0.526f, 0.494f, 0.462f, 0.429f, 0.392f, 0.344f, -0.04f}
 
 static inline float fx_clampf(float x, float lo, float hi) { return !(x > lo) ? lo : x > hi ? hi : x; }
 
@@ -309,16 +322,16 @@ static inline void fx_sky_prep(const fx_ctl *c, fx_sky_k *k)
     k->ws = 1.0f / 170.0f;
     k->wx = fx_wrap(c->time * 0.021f, FX_NOISE_N) + FX_NOISE_N;
     k->wy = fx_wrap(c->time * 0.013f + 17.0f, FX_NOISE_N) + FX_NOISE_N;
-    /* the coverage: the soft band (0.16 wide) is centred on the value that
-     * the share 1 - cover of the sky's samples stays under (the measured
-     * quantiles of n, every 10 %), so cover is about the cloudy share; 0
-     * leaves the band above every sample, 1 below */
-    static const float mid[11] = {1.06f, 0.684f, 0.623f, 0.577f, 0.537f, 0.498f, 0.460f, 0.420f, 0.376f, 0.318f, -0.04f};
+    /* the coverage: the band (FX_CLOUD_BAND wide) is centred on the value
+     * that the share 1 - cover of the sky's samples stays under (the
+     * measured quantiles of n, every 10 %), so cover is about the cloudy
+     * share; 0 leaves the band above every sample, 1 below */
+    static const float mid[11] = FX_CLOUD_MID;
     int ci = (int)(cover * 10.0f);
     ci = ci > 9 ? 9 : ci;
     float m = mid[ci] + (mid[ci + 1] - mid[ci]) * (cover * 10.0f - (float)ci);
-    k->lo = m - 0.08f;
-    k->iw = 6.25f;
+    k->lo = m - 0.5f * FX_CLOUD_BAND;
+    k->iw = 1.0f / FX_CLOUD_BAND;
     k->amax = fx_clampf(c->p.sky.alpha, 0.0f, 1.0f) * 255.0f;
     for (int i = 0; i < 3; i++) {
         k->lit[i] = fx_ch(c->p.sky.lit, i);
@@ -343,9 +356,13 @@ static inline float fx_sky_fade(uint32_t y)
 }
 
 /* The cloud value of four samples at picture coordinates X, Y (pixel y's
- * centre is y): a warp, then three octaves of value noise, 0 to 1 (about
- * normal, mean 0.5). Four table reads per lane. */
-static inline fxv fx_cloud_n(const fx_sky_k *k, const uint32_t *tab, fxv X, fxv Y)
+ * centre is y): a warp, then five octaves of value noise, 0 to 1 (about
+ * normal, mean 0.5), the fine ones heavier than a plain 1/2 falloff so
+ * that the edges have detail at a few picture pixels; *hf is the two finest
+ * octaves alone (0 to 1), the texture inside a cloud. Six table reads per
+ * lane. (Until 2026-10-14 three octaves of 0.55, 0.30 and 0.15: soft blobs
+ * on the TV.) */
+static inline fxv fx_cloud_n(const fx_sky_k *k, const uint32_t *tab, fxv X, fxv Y, fxv *hf)
 {
     fxv w = fx_sub(fx_noise(tab, fx_madd(X, FXV(k->ws), FXV(k->wx)), fx_madd(Y, FXV(k->ws), FXV(k->wy))), FXV(0.5f));
     fxv u = fx_madd(w, FXV(0.7f), fx_madd(X, FXV(k->sc), FXV(k->ox)));
@@ -353,25 +370,33 @@ static inline fxv fx_cloud_n(const fx_sky_k *k, const uint32_t *tab, fxv X, fxv 
     fxv n1 = fx_noise(tab, u, v);
     fxv n2 = fx_noise(tab, fx_madd(u, FXV(2.03f), FXV(19.7f)), fx_madd(v, FXV(2.03f), FXV(7.3f)));
     fxv n3 = fx_noise(tab, fx_madd(u, FXV(4.11f), FXV(3.1f)), fx_madd(v, FXV(4.11f), FXV(23.9f)));
-    return fx_madd(n1, FXV(0.55f), fx_madd(n2, FXV(0.30f), fx_mul(n3, FXV(0.15f))));
+    fxv n4 = fx_noise(tab, fx_madd(u, FXV(8.37f), FXV(41.3f)), fx_madd(v, FXV(8.37f), FXV(11.7f)));
+    fxv n5 = fx_noise(tab, fx_madd(u, FXV(17.1f), FXV(29.9f)), fx_madd(v, FXV(17.1f), FXV(53.1f)));
+    *hf = fx_madd(n4, FXV(FX_CLOUD_W4 / (FX_CLOUD_W4 + FX_CLOUD_W5)), fx_mul(n5, FXV(FX_CLOUD_W5 / (FX_CLOUD_W4 + FX_CLOUD_W5))));
+    fxv n = fx_madd(n1, FXV(FX_CLOUD_W1), fx_madd(n2, FXV(FX_CLOUD_W2), fx_mul(n3, FXV(FX_CLOUD_W3))));
+    return fx_madd(n4, FXV(FX_CLOUD_W4), fx_madd(n5, FXV(FX_CLOUD_W5), n));
 }
 
 /* Four cloud samples: the colour (0 to 255, also where the alpha is 0) and
  * the alpha (0 to 255, not dithered). The density d is a smooth step over
- * the soft band; the light falls with the thickness (the value past the
- * band's start, over three bands), rises near the sun and in a flash; thin
- * cloud takes the edge colour. */
+ * the band (FX_CLOUD_BAND wide: a crisp edge); the light falls with the
+ * thickness (the value past the band's start over FX_CLOUD_THICK), rises
+ * near the sun and in a flash, and the finest octaves shade the inside
+ * (FX_CLOUD_TEX: billows, not a flat fill); thin cloud takes the edge
+ * colour. */
 static inline void fx_cloud4(const fx_sky_k *k, const uint32_t *tab, fxv X, fxv Y, float fade, fxv rgb[3], fxv *a)
 {
-    fxv n = fx_cloud_n(k, tab, X, Y);
-    fxv q = fx_mul(fx_sub(n, FXV(k->lo)), FXV(k->iw));
-    fxv t = fx_clamp01(q);
+    fxv hf;
+    fxv n = fx_cloud_n(k, tab, X, Y, &hf);
+    fxv p = fx_sub(n, FXV(k->lo));
+    fxv t = fx_clamp01(fx_mul(p, FXV(k->iw)));
     fxv d = fx_mul(fx_mul(t, t), fx_nmsub(FXV(2.0f), t, FXV(3.0f)));
     *a = fx_mul(d, FXV(k->amax * fade));
-    fxv th = fx_clamp01(fx_mul(q, FXV(1.0f / 3.0f)));
+    fxv th = fx_clamp01(fx_mul(p, FXV(1.0f / FX_CLOUD_THICK)));
     fxv dx = fx_sub(X, FXV(k->sun_x)), dy = fx_sub(Y, FXV(k->sun_y));
     fxv sun = fx_max(fx_nmsub(fx_madd(dx, dx, fx_mul(dy, dy)), FXV(k->sun_k), FXV(1.0f)), FXV(0.0f));
     fxv light = fx_nmsub(th, FXV(0.55f), FXV(1.0f + k->flash));
+    light = fx_madd(fx_sub(hf, FXV(0.5f)), FXV(FX_CLOUD_TEX), light);
     light = fx_madd(sun, FXV(k->sun_gain), light);
     fxv e = fx_nmsub(d, FXV(k->edge_amt), FXV(k->edge_amt));             /* edge_amt (1 - d) */
     for (int c = 0; c < 3; c++) {

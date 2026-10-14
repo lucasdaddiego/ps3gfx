@@ -10,7 +10,7 @@
  * the fill first, at the same centre. The glyphs are white, so the colour of
  * a call tints them. The S and M sets bind as the fonts do (nearest at
  * 1080p); the L set always binds bilinear, because its layers turn and
- * scale. */
+ * scale; icon_rot always binds bilinear, for any set. */
 #ifndef ICONS_H
 #define ICONS_H
 
@@ -27,7 +27,10 @@ int icons_init(void);
  * icon is pixel exact at 1080p: round a moving offset before the call. */
 void icon(int id, float cx, float cy, u32 rgba);
 /* The same turned by angle (radians, clockwise on the screen) and scaled
- * about that centre, with no snap: for the L set, whose filter is bilinear. */
+ * about that centre, with no snap and always bilinear: the L set, and an S
+ * or M icon that moves by fractions of a pixel (a second gfx_tex of its
+ * set's texels, bilinear: no new RSX memory). At a whole-pixel centre, angle
+ * 0 and scale 1 its texels land 1:1, as icon's. */
 void icon_rot(int id, float cx, float cy, float angle, float scale, u32 rgba);
 int icon_size(int id);                       /* the set's pixel size: 32, 64 or 168; 0 for no icon */
 

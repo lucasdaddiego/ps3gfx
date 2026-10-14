@@ -326,6 +326,10 @@ static void icon_checks(void)
         CHECK(cap_end() == 4);
         for (int k = 0; k < 4; k++) CHECK(same(&cap[k], &g[k]));
         cap_start();
+        icon_rot(id, 400.25f, 299.5f, 0, 1, WHITE);               /* no snap (bilinear for every set): a fraction moves it by that */
+        CHECK(cap_end() == 4);
+        for (int k = 0; k < 4; k++) CHECK(cap[k].x == g[k].x + 0.25f && cap[k].y == g[k].y - 0.5f && cap[k].u == g[k].u && cap[k].v == g[k].v);
+        cap_start();
         icon_rot(id, 400, 300, 3.14159265f, 2, WHITE);            /* a half turn at scale 2: about the centre */
         CHECK(cap_end() == 4 && near(cap[0].x, 400 + 2 * (400 - g[0].x), 0.01f) && near(cap[0].y, 300 + 2 * (300 - g[0].y), 0.01f));
         CHECK(cap[0].u == g[0].u && cap[2].v == g[2].v);

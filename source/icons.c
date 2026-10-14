@@ -18,6 +18,7 @@ typedef struct {
 typedef struct {
     int px;
     gfx_tex tex;
+    gfx_tex lin;                             /* the same texels, bilinear: icon_rot's (an S or M icon that moves) */
 } iset;
 
 static iglyph glyphs[IC_COUNT];
@@ -57,6 +58,8 @@ int icons_init(void)
         u16 linear = turns || !(gfx_w == 1920 && gfx_h == 1080);
         u8 *t = gfx_tex_new(&sets[k].tex, (u16)aw[k], (u16)ah[k], GFX_TEX_A4R4G4B4, linear);
         if (!t) return -1;
+        sets[k].lin = sets[k].tex;           /* no new RSX memory: a second gfx_tex, so gfx binds it anew */
+        sets[k].lin.linear = 1;
         for (int y = 0; y < ah[k]; y++) {
             u32 *row = (u32 *)(t + y * sets[k].tex.pitch);
             const u8 *src = p + y * aw[k] / 2;
@@ -107,7 +110,7 @@ void icon_rot(int id, float cx, float cy, float angle, float scale, u32 rgba)
     float c = cosf(angle) * scale, s = sinf(angle) * scale;
     float dx[4] = {-g->cx, g->w - g->cx, g->w - g->cx, -g->cx}, dy[4] = {-g->cy, -g->cy, g->h - g->cy, g->h - g->cy};
     float u[4] = {g->u0, g->u1, g->u1, g->u0}, v[4] = {g->v0, g->v0, g->v1, g->v1};
-    gfx_texture(&sets[g->set].tex);
+    gfx_texture(&sets[g->set].lin);
     gfx_vtx *q = gfx_prim(GFX_QUADS, 4);
     for (int k = 0; k < 4; k++) q = gfx_put(q, cx + dx[k] * c - dy[k] * s, cy + dx[k] * s + dy[k] * c, rgba, u[k], v[k]);
     gfx_texture(NULL);

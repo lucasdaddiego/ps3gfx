@@ -15,7 +15,8 @@
  *
  * Options: --golden checks the pictures' hashes (the same bits on arm64
  * and x86-64 with -ffp-contract=off; not in CI, whose compiler may differ);
- * --out DIR writes the reference pictures as PPM; --bench times the jobs. */
+ * --out DIR writes the reference pictures as PPM; --bench times the jobs;
+ * --quantiles prints the cloud value's quantiles (FX_CLOUD_MID). */
 #define _POSIX_C_SOURCE 200112L              /* clock_gettime and snprintf under -std=c99, glibc and macOS */
 #include <stdio.h>
 #include <stdlib.h>
@@ -745,9 +746,10 @@ static void write_refs(const char *dir)
 
 static void golden(void)
 {
-    /* clang 21 on arm64 (-O2, -O0) and on x86-64 (Rosetta), 2026-10-13: the same bits */
-    static const uint32_t want[] = {0xc073c671, 0x51ee6017, 0x84a6eeb6, 0xcf720c31, 0xf826175d,
-                                    0xeda3128e, 0xf317c787, 0x91773a61, 0x53902be5, 0x5c6026a1};
+    /* clang 21 on arm64 (-O2, -O0) and on x86-64 (Rosetta): the same bits (2026-10-13; the sky's six
+     * again on 2026-10-14, the five-octave clouds) */
+    static const uint32_t want[] = {0xd79e27c1, 0x571dcac9, 0x871960e1, 0x657eb161, 0xf822c06e,
+                                    0x7ff07c6a, 0xf317c787, 0x91773a61, 0x53902be5, 0x5c6026a1};
     uint32_t got[10];
     int n = 0;
     fx_ctl c;
@@ -847,16 +849,54 @@ static void bench(void)
     printf("  rain, 1,500 drops and 40 splashes: %.3f ms a frame (%.1f ns a quad)\n", ra * 1e3, ra * 1e9 / 1540);
 }
 
+/* ---- the coverage quantiles (--quantiles) ------------------------------------------- */
+
+static int cmpf(const void *a, const void *b)
+{
+    float x = *(const float *)a, y = *(const float *)b;
+    return x < y ? -1 : x > y;
+}
+
+/* The values of fx_cloud_n over 64 drift offsets and times (every 4th
+ * pixel of each picture), and their quantiles every 10 %: the centres of
+ * FX_CLOUD_MID (cover c: the 1 - c quantile). */
+static void quantiles(void)
+{
+    enum { N = 64, SX = 120, SY = 68 };
+    static float v[N * SX * SY];
+    int n = 0;
+    for (int i = 0; i < N; i++) {
+        fx_ctl c;
+        fx_sky_k k;
+        sky_ctl(&c, DUSK);
+        c.p.sky.off_x = 311.0f * (float)i;
+        c.p.sky.off_y = -173.0f * (float)i;
+        c.time = 97.0f * (float)i;
+        fx_sky_prep(&c, &k);
+        for (int y = 0; y < SY; y++)
+            for (int x = 0; x < SX; x += 1) {
+                fxv hf, s = fx_cloud_n(&k, tab, fxv4(4.0f * (float)x, 4.0f * (float)x + 1, 4.0f * (float)x + 2, 4.0f * (float)x + 3),
+                                         FXV(4.0f * (float)y + 1), &hf);
+                v[n++] = fxv_lane(s, i & 3);
+            }
+    }
+    qsort(v, (size_t)n, sizeof v[0], cmpf);
+    printf("quantiles of n (%d samples, min %.3f, max %.3f), cover 10 %% to 90 %%:", n, v[0], v[n - 1]);
+    for (int q = 9; q >= 1; q--) printf(" %.3ff,", v[(size_t)n * q / 10]);
+    printf("\n");
+}
+
 int main(int argc, char **argv)
 {
-    int gold = 0, ben = 0;
+    int gold = 0, ben = 0, qua = 0;
     const char *out = NULL;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--golden")) gold = 1;
         else if (!strcmp(argv[i], "--bench")) ben = 1;
+        else if (!strcmp(argv[i], "--quantiles")) qua = 1;
         else if (!strcmp(argv[i], "--out") && i + 1 < argc) out = argv[++i];
         else {
-            printf("usage: %s [--golden] [--bench] [--out DIR]\n", argv[0]);
+            printf("usage: %s [--golden] [--bench] [--quantiles] [--out DIR]\n", argv[0]);
             return 2;
         }
     }
@@ -870,6 +910,7 @@ int main(int argc, char **argv)
     if (gold) golden();
     if (out) write_refs(out);
     if (ben) bench();
+    if (qua) quantiles();
     if (fails) {
         printf("%d checks failed\n", fails);
         return 1;
