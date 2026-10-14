@@ -107,6 +107,11 @@ calls `icons_init`: 753,792 B of RSX memory, 184,516 B of data in the ELF): Phos
   `round_rect`), `glass_uv` (the UVs of a canvas rect in a texture that covers the screen), `glow9` (a
   9-slice halo around a rect), `quad_rot` (a turned textured quad), `strip` (a polyline with mitred joins),
   `area` (the fill under it), `tex_upload` (main memory into a texture in 32-bit stores)
+- `aa_line`, `aa_lines`, `aa_strip`, `aa_ring`, `aa_disc`, `aa_poly`, `aa_corners`: anti-aliased lines and
+  shapes, untextured (the RSX draws with no multisampling): every edge fades from the colour's alpha to 0
+  over 1 px, a w px line is a core of w - 1 px and a 1 px feather on each side, the quads touch and never
+  overlap (a translucent line covers no pixel twice), and they join one GFX_QUADS draw; `aa_corners` is a 1
+  px fringe outside the arcs of `round_rect`'s corners
 - `tex_pair`, `tex_pair_new`, `tex_pair_shown`, `tex_pair_wtex`, `tex_pair_written`, `tex_pair_swap`: two
   textures that take turns (the frame draws one while a writer, an SPU by DMA, fills the other)
 
@@ -153,6 +158,12 @@ embeds, does not change. The atlases bind as the
 fonts do (nearest at 1080p), except the L icons, which always bind bilinear
 because they turn and scale; their texels are white also at alpha 0, so a
 bilinear sample mixes no black into the edges.
+
+The addition of 2026-10-14, for Couch's first console round of 0.3.0 ("some
+lines are rough"): the anti-aliased helpers of `fx.h` (`aa_*`), new
+functions in `fx.c` only, so an app that calls no `fx.h` helper links none
+of them: PS3 Health's and Cell Bench's ELFs and link maps stay
+byte-identical.
 
 ## The runtime pin
 
@@ -538,7 +549,9 @@ against the installed copy.
   icon id's cell and its centre, `icon_rot` at no turn against `icon`, the UVs of `tex_sub`, `tex_round` and
   `glass_uv` at the default, the narrow and the TV area and after a slide of the canvas, the slices of `glow9`
   (each pixel of the halo once, the rect and the outside never), `quad_rot` at 0 against `tex_sub`, the
-  miters and the pieces of `strip`, `area`, `tex_upload` and `tex_pair`. It prints the RSX memory of
+  miters and the pieces of `strip`, `area`, the anti-aliased helpers (each one's quads, the ink's extent, the
+  feather's alpha, a miter, both windings of `aa_poly`, nothing for no width), `tex_upload` and `tex_pair`.
+  It prints the RSX memory of
   `digits_init` and `icons_init`.
 - The smoke app's pages (CI, R1): frosted glass over a picture with a halo, a curve and a turned quad; the
   display digits with a flip card at four phases; every icon. CI takes each snapshot twice and compares the

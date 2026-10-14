@@ -1,5 +1,7 @@
 /* Drawing helpers on the public gfx API (fx.h). An archive member of its
- * own: an app that calls none of them links none of this. */
+ * own: an app that calls none of them links none of this. The
+ * anti-aliased helpers (aa_*) were added for Couch 0.3.0's console round
+ * of 2026-10-14 ("some lines are rough"). */
 #include <math.h>
 #include <stddef.h>
 #include "gfx.h"
@@ -184,6 +186,248 @@ void area(const float *pts, int n, float base_y, u32 rgba_top, u32 rgba_base)
             q = gfx_put(q, pts[2 * i], base_y, rgba_base, 0, 0);
         }
     }
+}
+
+/* ---- anti-aliased lines and shapes ---------------------------------------- */
+
+/* The helpers' quads, gathered here and sent as GFX_QUADS primitives of at
+ * most GFX_PRIM_MAX vertices (consecutive ones with no texture join one
+ * draw). Each helper sends what is left before it returns. */
+typedef struct {
+    float x, y;
+    u32 c;
+} aav;
+static aav aq[GFX_PRIM_MAX];
+static int aqn;
+
+static void aa_flush(void)
+{
+    if (!aqn) return;
+    gfx_texture(NULL);
+    gfx_vtx *q = gfx_prim(GFX_QUADS, aqn);
+    for (int i = 0; i < aqn; i++) q = gfx_put(q, aq[i].x, aq[i].y, aq[i].c, 0, 0);
+    aqn = 0;
+}
+
+/* One quad: the corners a, b, c, d in order, each with its colour. */
+static void aa_quad(const aav *a, const aav *b, const aav *c, const aav *d)
+{
+    if (aqn + 4 > GFX_PRIM_MAX) aa_flush();
+    aq[aqn++] = *a;
+    aq[aqn++] = *b;
+    aq[aqn++] = *c;
+    aq[aqn++] = *d;
+}
+
+/* The core's half width of a w px line; under 1 px the alpha goes down instead. */
+static float aa_core(float w, u32 *rgba)
+{
+    if (w >= 1) return w / 2 - 0.5f;
+    u32 a = (u32)((float)(*rgba & 255) * (w > 0 ? w : 0) + 0.5f);
+    *rgba = (*rgba & ~0xffu) | a;
+    return 0;
+}
+
+/* Two rows of four vertices across a line (outer left, inner left, inner
+ * right, outer right): the three quads between them. */
+static void aa_rows(const aav *p, const aav *q)
+{
+    for (int k = 0; k < 3; k++) aa_quad(&p[k], &q[k], &q[k + 1], &p[k + 1]);
+}
+
+/* The row across point x, y: offsets o[k] times the unit across (nx, ny),
+ * the colours c (a for the inner two, z for the outer two, or z for all). */
+static void aa_row(aav *r, float x, float y, float nx, float ny, float hc, u32 in, u32 out)
+{
+    const float o[4] = {hc + 1, hc, -hc, -hc - 1};
+    for (int k = 0; k < 4; k++) {
+        r[k].x = x + nx * o[k];
+        r[k].y = y + ny * o[k];
+        r[k].c = k == 1 || k == 2 ? in : out;
+    }
+}
+
+/* One segment: a 3 x 3 grid of quads, the core between the inner rows and
+ * half a pixel in from each end, the feather 1 px wide around it. */
+static void aa_seg(float x0, float y0, float x1, float y1, float hc, u32 c)
+{
+    float dx = x1 - x0, dy = y1 - y0, len = sqrtf(dx * dx + dy * dy);
+    if (len <= 0) return;
+    float ux = dx / len, uy = dy / len, nx = uy, ny = -ux, e = len < 1 ? len / 2 : 0.5f;
+    u32 z = c & ~0xffu;
+    aav r[4][4];
+    aa_row(r[0], x0 - ux * 0.5f, y0 - uy * 0.5f, nx, ny, hc, z, z);
+    aa_row(r[1], x0 + ux * e, y0 + uy * e, nx, ny, hc, c, z);
+    aa_row(r[2], x1 - ux * e, y1 - uy * e, nx, ny, hc, c, z);
+    aa_row(r[3], x1 + ux * 0.5f, y1 + uy * 0.5f, nx, ny, hc, z, z);
+    for (int j = 0; j < 3; j++) aa_rows(r[j], r[j + 1]);
+}
+
+void aa_line(float x0, float y0, float x1, float y1, float w, u32 rgba)
+{
+    if (w <= 0) return;
+    float hc = aa_core(w, &rgba);
+    aa_seg(x0, y0, x1, y1, hc, rgba);
+    aa_flush();
+}
+
+void aa_lines(const float *seg, int n, float w, u32 rgba)
+{
+    if (w <= 0) return;
+    float hc = aa_core(w, &rgba);
+    for (int i = 0; i < n; i++) aa_seg(seg[4 * i], seg[4 * i + 1], seg[4 * i + 2], seg[4 * i + 3], hc, rgba);
+    aa_flush();
+}
+
+/* The polyline: at each point the row across along strip's miter (miter at
+ * half width 1, times each offset), the ends half a pixel in, and a row of
+ * alpha 0 half a pixel past each end. */
+void aa_strip(const float *pts, int n, float w, u32 rgba)
+{
+    if (n < 2 || w <= 0) return;
+    float hc = aa_core(w, &rgba);
+    u32 z = rgba & ~0xffu;
+    aav prev[4], cur[4], cap[4];
+    for (int i = 0; i < n; i++) {
+        float mx, my, x = pts[2 * i], y = pts[2 * i + 1];
+        miter(pts, n, i, 1, &mx, &my);
+        if (i == 0 || i == n - 1) {                       /* an end: the segment's direction, outward */
+            int a = i == 0 ? 1 : n - 2, b = i;
+            float dx = pts[2 * b] - pts[2 * a], dy = pts[2 * b + 1] - pts[2 * a + 1], len = sqrtf(dx * dx + dy * dy);
+            float ux = len > 0 ? dx / len : 0, uy = len > 0 ? dy / len : 0, e = len < 1 ? len / 2 : 0.5f;
+            aa_row(cap, x + ux * 0.5f, y + uy * 0.5f, mx, my, hc, z, z);
+            aa_row(cur, x - ux * e, y - uy * e, mx, my, hc, rgba, z);
+            if (i == 0) aa_rows(cap, cur);
+            else {
+                aa_rows(prev, cur);
+                aa_rows(cur, cap);
+            }
+        } else {
+            aa_row(cur, x, y, mx, my, hc, rgba, z);
+            aa_rows(prev, cur);
+        }
+        for (int k = 0; k < 4; k++) prev[k] = cur[k];
+    }
+    aa_flush();
+}
+
+/* The unit circle in 96 steps, made at the first call (each angle through a
+ * volatile, as corners above). A circle takes 16 points under radius 8, 24
+ * under 16, 48 under 100, else 96: at most 0.2 px from the true circle. */
+#define CIRC 96
+static float cc[CIRC + 1], cs[CIRC + 1];
+static int circ_made;
+
+static void circ(void)
+{
+    volatile float va;
+    for (int i = 0; i < CIRC; i++) {
+        va = 2 * PI_F * (float)i / CIRC;
+        float a = va;
+        cc[i] = cosf(a);
+        cs[i] = sinf(a);
+    }
+    cc[CIRC] = cc[0];
+    cs[CIRC] = cs[0];
+    circ_made = 1;
+}
+
+static int circ_step(float r) { return r < 8 ? 6 : r < 16 ? 4 : r < 100 ? 2 : 1; }
+
+void aa_ring(float cx, float cy, float r, float w, u32 rgba)
+{
+    if (w <= 0 || r <= 0) return;
+    if (!circ_made) circ();
+    float hc = aa_core(w, &rgba);
+    u32 z = rgba & ~0xffu;
+    float rad[4] = {r + hc + 1, r + hc, r - hc, r - hc - 1};
+    for (int k = 0; k < 4; k++) rad[k] = rad[k] < 0 ? 0 : rad[k];
+    int st = circ_step(r + hc + 1);
+    aav p[4], q[4];
+    for (int i = 0; i <= CIRC; i += st) {
+        for (int k = 0; k < 4; k++) {
+            q[k].x = cx + cc[i] * rad[k];
+            q[k].y = cy + cs[i] * rad[k];
+            q[k].c = k == 1 || k == 2 ? rgba : z;
+        }
+        if (i) aa_rows(p, q);
+        for (int k = 0; k < 4; k++) p[k] = q[k];
+    }
+    aa_flush();
+}
+
+void aa_disc(float cx, float cy, float r, u32 rgba)
+{
+    if (r <= 0) return;
+    if (!circ_made) circ();
+    u32 z = rgba & ~0xffu;
+    float ri = r > 0.5f ? r - 0.5f : 0, ro = r + 0.5f;
+    if (r < 0.5f) rgba = (rgba & ~0xffu) | (u32)((float)(rgba & 255) * 2 * r + 0.5f);
+    int st = circ_step(ro);
+    aav c = {cx, cy, rgba}, p[2], q[2];
+    for (int i = 0; i <= CIRC; i += st) {
+        q[0] = (aav){cx + cc[i] * ri, cy + cs[i] * ri, rgba};
+        q[1] = (aav){cx + cc[i] * ro, cy + cs[i] * ro, z};
+        if (i) {
+            if (ri > 0) aa_quad(&c, &p[0], &q[0], &q[0]);   /* a triangle of the fan: the last corner twice */
+            aa_quad(&p[0], &p[1], &q[1], &q[0]);
+        }
+        p[0] = q[0];
+        p[1] = q[1];
+    }
+    aa_flush();
+}
+
+void aa_poly(const float *pts, int n, u32 rgba)
+{
+    if (n < 3 || n > 64) return;
+    u32 z = rgba & ~0xffu;
+    float gx = 0, gy = 0;
+    for (int i = 0; i < n; i++) gx += pts[2 * i], gy += pts[2 * i + 1];
+    gx /= (float)n;
+    gy /= (float)n;
+    aav in[65], out[65], g = {gx, gy, rgba};
+    for (int i = 0; i < n; i++) {
+        int a = (i + n - 1) % n, b = (i + 1) % n;
+        float ax, ay, bx, by, x = pts[2 * i], y = pts[2 * i + 1];
+        normal(pts, a, i, &ax, &ay);
+        normal(pts, i, b, &bx, &by);
+        float mx = ax + bx, my = ay + by, ml = sqrtf(mx * mx + my * my);
+        if (ml <= 0) mx = ax, my = ay, ml = 1;
+        mx /= ml;
+        my /= ml;
+        float d = mx * ax + my * ay, k = d > 0.25f ? 1 / d : 4;   /* the miter, at most 4 times */
+        if (mx * (x - gx) + my * (y - gy) < 0) k = -k;            /* outward */
+        in[i] = (aav){x - mx * k * 0.5f, y - my * k * 0.5f, rgba};
+        out[i] = (aav){x + mx * k * 0.5f, y + my * k * 0.5f, z};
+    }
+    in[n] = in[0];
+    out[n] = out[0];
+    for (int i = 0; i < n; i++) {
+        aa_quad(&g, &in[i], &in[i + 1], &in[i + 1]);
+        aa_quad(&in[i], &out[i], &out[i + 1], &in[i + 1]);
+    }
+    aa_flush();
+}
+
+void aa_corners(float x, float y, float w, float h, float r, u32 rgba)
+{
+    float m = (w < h ? w : h) / 2;
+    r = r > m ? m : r;
+    if (r < 1) return;
+    if (!corners_made) corners();
+    int seg = r < 8 ? 4 : 8;
+    const float *c = rc[seg == 8], *s = rs[seg == 8];
+    const float cx[4] = {x + r, x + w - r, x + w - r, x + r}, cy[4] = {y + r, y + r, y + h - r, y + h - r};
+    u32 half = (rgba & ~0xffu) | ((rgba & 255) + 1) / 2, z = rgba & ~0xffu;
+    for (int k = 0; k < 4; k++)
+        for (int i = 0; i < seg; i++) {
+            int j = k * (seg + 1) + i;
+            aav a = {cx[k] + c[j] * r, cy[k] + s[j] * r, half}, b = {cx[k] + c[j + 1] * r, cy[k] + s[j + 1] * r, half};
+            aav bo = {cx[k] + c[j + 1] * (r + 1), cy[k] + s[j + 1] * (r + 1), z}, ao = {cx[k] + c[j] * (r + 1), cy[k] + s[j] * (r + 1), z};
+            aa_quad(&a, &b, &bo, &ao);
+        }
+    aa_flush();
 }
 
 void tex_upload(const gfx_tex *t, void *dst, const void *src, u32 src_pitch_words)

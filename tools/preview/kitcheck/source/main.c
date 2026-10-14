@@ -341,6 +341,93 @@ static void icon_checks(void)
     ui_flip();
 }
 
+/* The anti-aliased helpers (fx.h): the quads' count, the ink's extent, the
+ * feather's alpha, nothing for no width or no points. */
+static int extent(float *x0, float *y0, float *x1, float *y1)
+{
+    *x0 = *y0 = 1e9f;
+    *x1 = *y1 = -1e9f;
+    for (int i = 0; i < ncap; i++) {
+        if (cap[i].x < *x0) *x0 = cap[i].x;
+        if (cap[i].x > *x1) *x1 = cap[i].x;
+        if (cap[i].y < *y0) *y0 = cap[i].y;
+        if (cap[i].y > *y1) *y1 = cap[i].y;
+    }
+    return ncap;
+}
+
+static int count_rgba(u32 c)
+{
+    int n = 0;
+    for (int i = 0; i < ncap; i++) n += cap[i].rgba == c;
+    return n;
+}
+
+static void aa_checks(void)
+{
+    float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+    cap_start();                                                  /* a 3 px line: a 3 x 3 grid of quads, the core 2 px, 1 px of feather */
+    aa_line(100, 100, 200, 100, 3, 0x6cb8ffc0);
+    CHECK(cap_end() == 36 && extent(&x0, &y0, &x1, &y1));
+    CHECK(x0 == 99.5f && x1 == 200.5f && y0 == 98 && y1 == 102);
+    CHECK(count_rgba(0x6cb8ffc0) == 16 && count_rgba(0x6cb8ff00) == 20);   /* the core 4, each feather side 2, each corner 1 */
+    cap_start();                                                  /* under 1 px: no core, the alpha times w */
+    aa_line(100, 100, 200, 100, 0.5f, 0x6cb8ffc0);
+    CHECK(cap_end() == 36 && count_rgba(0x6cb8ff60) == 16 && extent(&x0, &y0, &x1, &y1) && y0 == 99 && y1 == 101);
+    float seg[8] = {10, 10, 10, 40, 50, 10, 80, 40};
+    cap_start();
+    aa_lines(seg, 2, 2, WHITE);
+    CHECK(cap_end() == 72);
+    float st[6] = {100, 100, 200, 100, 300, 100};
+    cap_start();                                                  /* a strip: a cap, two segments, a cap; the ink to the end points */
+    aa_strip(st, 3, 3, 0xffd36bff);
+    CHECK(cap_end() == 48 && extent(&x0, &y0, &x1, &y1) && x0 == 99.5f && x1 == 300.5f && y0 == 98 && y1 == 102);
+    float rt[6] = {100, 100, 200, 100, 200, 200};
+    cap_start();                                                  /* a right angle: the miter of strip at each offset */
+    aa_strip(rt, 3, 4, WHITE);
+    CHECK(cap_end() == 48);
+    int corner = 0;
+    for (int i = 0; i < ncap; i++) corner += near(cap[i].x, 202.5f, 0.001f) && near(cap[i].y, 97.5f, 0.001f);
+    CHECK(corner > 0);
+    static float lng[2 * 120];
+    for (int i = 0; i < 120; i++) lng[2 * i] = 10 + i * 6, lng[2 * i + 1] = 500 + (i % 7) * 3;
+    cap_start();
+    aa_strip(lng, 80, 2, WHITE);                                  /* 79 segments and two caps, 243 quads: four primitives */
+    CHECK(cap_end() == 243 * 4);
+    cap_start();                                                  /* a ring: every vertex at one of its four radii */
+    aa_ring(500, 500, 30, 3, 0xffffff40);
+    CHECK(cap_end() == 48 * 12);
+    int off = 0;
+    for (int i = 0; i < ncap; i++) {
+        float d = sqrtf((cap[i].x - 500) * (cap[i].x - 500) + (cap[i].y - 500) * (cap[i].y - 500));
+        off += !(near(d, 32, 0.01f) || near(d, 31, 0.01f) || near(d, 29, 0.01f) || near(d, 28, 0.01f));
+    }
+    CHECK(off == 0 && count_rgba(0xffffff40) == 48 * 8);
+    cap_start();                                                  /* a disc: the fan to r - 0.5, the feather to r + 0.5 */
+    aa_disc(300, 300, 10, WHITE);
+    CHECK(cap_end() == 24 * 8 && extent(&x0, &y0, &x1, &y1) && near(x0, 289.5f, 0.001f) && near(y1, 310.5f, 0.001f));
+    float tr[6] = {400, 400, 440, 400, 420, 380};
+    cap_start();                                                  /* a triangle: the core inside, the feather outside */
+    aa_poly(tr, 3, WHITE);
+    CHECK(cap_end() == 24 && extent(&x0, &y0, &x1, &y1) && x0 < 400 && x1 > 440 && y0 < 380 && y1 > 400);
+    float rev[6] = {420, 380, 440, 400, 400, 400};                /* the other winding: the same extent */
+    float e0 = 0, e1 = 0, e2 = 0, e3 = 0;
+    cap_start();
+    aa_poly(rev, 3, WHITE);
+    CHECK(cap_end() == 24 && extent(&e0, &e1, &e2, &e3) && near(e0, x0, 0.001f) && near(e2, x1, 0.001f) && near(e1, y0, 0.001f));
+    cap_start();                                                  /* the corners: 8 quads each, half the alpha at the arc */
+    aa_corners(100, 100, 200, 100, 20, 0x0b142680);
+    CHECK(cap_end() == 128 && count_rgba(0x0b142640) == 64 && extent(&x0, &y0, &x1, &y1) && near(x0, 99, 0.001f) && near(y1, 201, 0.001f));
+    cap_start();
+    aa_corners(100, 100, 200, 100, 0.5f, WHITE);
+    aa_line(10, 10, 20, 20, 0, WHITE);
+    aa_strip(st, 1, 3, WHITE);
+    aa_ring(10, 10, 5, 0, WHITE);
+    aa_disc(10, 10, 0, WHITE);
+    aa_poly(st, 2, WHITE);
+    CHECK(cap_end() == 0);
+}
+
 static void fx_checks(void)
 {
     static const int areas[3][4] = {{SAFE_DEF_L, SAFE_DEF_T, SAFE_DEF_R, SAFE_DEF_B}, {160, 90, 1760, 990}, {0, 2, 1920, 1078}};
@@ -446,6 +533,7 @@ static void fx_checks(void)
     cap_start();
     area(st, 3, 160, 0x6cb8ff40, 0x6cb8ff00);
     CHECK(cap_end() == 6 && cap[0].y == 100 && cap[1].y == 160 && cap[4].x == 300 && cap[0].rgba == 0x6cb8ff40 && cap[1].rgba == 0x6cb8ff00);
+    aa_checks();
     ui_flip();
     /* tex_upload: whole words of each row, from a source pitch, nothing past them */
     static u32 src[7 * 36];

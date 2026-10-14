@@ -1,10 +1,11 @@
 /* Drawing helpers on the public gfx API (fx.c): parts of textures, textured
  * rounded rectangles for frosted glass, a 9-slice halo, a turned quad, a
- * polyline and the fill under it, and two textures that take turns (a
- * picture that an SPU writes while the RSX draws the other). They change no
- * back end and make no LV2 call; fx.c is an archive member of its own, so an
- * app links it only when it calls one. Draw them between begin_frame and
- * ui_flip, as the kit. A NULL texture draws the tint alone. */
+ * polyline and the fill under it, anti-aliased lines and shapes, and two
+ * textures that take turns (a picture that an SPU writes while the RSX
+ * draws the other). They change no back end and make no LV2 call; fx.c is
+ * an archive member of its own, so an app links it only when it calls one.
+ * Draw them between begin_frame and ui_flip, as the kit. A NULL texture
+ * draws the tint alone. */
 #ifndef FX_H
 #define FX_H
 
@@ -41,6 +42,34 @@ void strip(const float *pts, int n, float width, u32 rgba);
 /* The fill under a polyline down to base_y: rgba_top at the points,
  * rgba_base at base_y (a fade with a lower alpha there). */
 void area(const float *pts, int n, float base_y, u32 rgba_top, u32 rgba_base);
+
+/* Anti-aliased lines and shapes, untextured: every edge fades from the
+ * colour's alpha to 0 over 1 px, so a slanted or curved edge reads smooth
+ * at 1080p (the RSX draws with no multisampling). A w px line is a core of
+ * w - 1 px at the colour and a 1 px feather on each side: the same ink as
+ * a w px line (under 1 px: no core, the alpha times w). Quads that touch
+ * and never overlap, so a translucent line covers no pixel twice, sent as
+ * GFX_QUADS: consecutive calls join one draw. The alpha test drops the
+ * feather's last 16th. */
+/* A segment, its ends feathered too (the ink ends at the end points). */
+void aa_line(float x0, float y0, float x1, float y1, float w, u32 rgba);
+/* n separate segments of 4 floats each (x0, y0, x1, y1): dashes, ticks. */
+void aa_lines(const float *seg, int n, float w, u32 rgba);
+/* A polyline of n points with the mitred joins of strip, its two ends
+ * feathered. */
+void aa_strip(const float *pts, int n, float w, u32 rgba);
+/* A circle's outline, w px wide, centred on radius r. */
+void aa_ring(float cx, float cy, float r, float w, u32 rgba);
+/* A filled circle: the ink ends at radius r. */
+void aa_disc(float cx, float cy, float r, u32 rgba);
+/* A filled convex polygon of n points (either winding), its ink to the
+ * points' outline. */
+void aa_poly(const float *pts, int n, u32 rgba);
+/* The fringe of round_rect's corners: 1 px outside each corner's arc, from
+ * half the alpha at the arc to 0, so a rounded rect drawn with pixel
+ * centres (round_rect, tex_round) gets about the coverage its corners
+ * miss. The straight edges get none: on whole pixels they are exact. */
+void aa_corners(float x, float y, float w, float h, float r, u32 rgba);
 
 /* A picture from main memory into a texture: t->h rows of the texels of
  * t->w (whole 32-bit words), from src (rows of src_pitch_words words) to
