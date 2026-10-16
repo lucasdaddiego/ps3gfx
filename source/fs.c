@@ -11,9 +11,10 @@ int fs_write_file(const char *path, const void *data, u64 len, int append)
     rc = sysLv2FsOpen(path, SYS_O_WRONLY | SYS_O_CREAT | (append ? SYS_O_APPEND : SYS_O_TRUNC), &fd, 0666, NULL, 0);
     if (rc) return rc;
     rc = len ? sysLv2FsWrite(fd, data, len, &w) : 0;     /* the empty journal: O_TRUNC did it */
-    sysLv2FsFsync(fd);
-    sysLv2FsClose(fd);
-    return rc ? rc : w == len ? 0 : -1;
+    s32 sync_rc = sysLv2FsFsync(fd), close_rc = sysLv2FsClose(fd);
+    if (rc) return rc;
+    if (w != len) return -1;
+    return sync_rc ? sync_rc : close_rc;
 }
 
 /* Reads up to n bytes; returns the count, -1 when the file is missing. */
@@ -40,7 +41,7 @@ int fs_selftest(const char *dir, int *mkdir_rc, int *open_rc, int *write_rc)
     *open_rc = sysLv2FsOpen(p, SYS_O_WRONLY | SYS_O_CREAT | SYS_O_APPEND, &fd, 0666, NULL, 0);
     if (*open_rc) return -1;
     *write_rc = sysLv2FsWrite(fd, "start\n", 6, &w);
-    sysLv2FsFsync(fd);
-    sysLv2FsClose(fd);
+    s32 sync_rc = sysLv2FsFsync(fd), close_rc = sysLv2FsClose(fd);
+    if (*write_rc == 0) *write_rc = sync_rc ? sync_rc : close_rc;
     return *write_rc == 0 && w == 6 ? 0 : -1;
 }

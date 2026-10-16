@@ -253,10 +253,12 @@ s32 sysLv2FsOpen(const char *path, s32 of, s32 *fd, u32 mode, const void *arg, u
     char p[1024];
     int f = (of & 3) == SYS_O_WRONLY ? O_WRONLY : (of & 3) == SYS_O_RDWR ? O_RDWR : O_RDONLY;
     if (of & SYS_O_CREAT) f |= O_CREAT;
+    if (of & SYS_O_EXCL) f |= O_EXCL;
     if (of & SYS_O_TRUNC) f |= O_TRUNC;
     if (of & SYS_O_APPEND) f |= O_APPEND;
     int r = open(map(path, p, sizeof p), f, 0666);
-    if (r < 0) return (s32)0x80010006;
+    if (r < 0) return errno == EEXIST ? (s32)0x80010014 :
+                      errno == ENOENT ? (s32)0x80010006 : (s32)0x80010009;
     *fd = r;
     return 0;
 }

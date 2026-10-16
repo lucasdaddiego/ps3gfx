@@ -5,6 +5,7 @@
 #define SYS_O_WRONLY 0x000001
 #define SYS_O_RDWR   0x000002
 #define SYS_O_CREAT  0x000040
+#define SYS_O_EXCL   0x000080
 #define SYS_O_TRUNC  0x000200
 #define SYS_O_APPEND 0x000400
 typedef struct { s32 st_mode, st_uid, st_gid; u64 st_atime_, st_mtime_, st_ctime_, st_size, st_blksize; } sysFSStat;

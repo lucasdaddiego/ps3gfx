@@ -10,6 +10,8 @@
 #include <sys/stat.h>
 #include "fs.h"
 
+extern int stub_fail_sync, stub_fail_close, stub_short_writes;
+
 static int fails;
 #define CHECK(c) do { if (!(c)) { printf("FAIL line %d: %s\n", __LINE__, #c); fails++; } } while (0)
 
@@ -65,6 +67,19 @@ int main(void)
     CHECK(fs_remove(path) != 0);                                        /* already gone */
     printf("fs_remove: ok\n");
 
+    int *faults[] = { &stub_fail_sync, &stub_fail_close, &stub_short_writes };
+    for (unsigned i = 0; i < sizeof faults / sizeof faults[0]; i++) {
+        int mk, op, wr;
+        *faults[i] = 1;
+        CHECK(fs_write_file(path, "record\n", 7, 1) != 0);
+        CHECK(fs_selftest(dir, &mk, &op, &wr) != 0);
+        *faults[i] = 0;
+    }
+    CHECK(fs_write_file(path, "record\n", 7, 1) == 0);
+    CHECK(fs_remove(path) == 0);
+    snprintf(path, sizeof path, "%s/starts.txt", dir);
+    CHECK(fs_remove(path) == 0);
+    printf("write, sync and close errors propagated: ok\n");
     rmdir(dir);
     if (fails) { printf("%d checks failed\n", fails); return 1; }
     printf("all checks passed\n");

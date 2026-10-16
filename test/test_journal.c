@@ -12,7 +12,7 @@
 #include "fs.h"
 #include "journal.h"
 
-extern int stub_fail_writes;
+extern int stub_fail_writes, stub_fail_sync, stub_fail_close, stub_fail_reads, stub_short_writes;
 
 static int fails;
 #define CHECK(c) do { if (!(c)) { printf("FAIL line %d: %s\n", __LINE__, #c); fails++; } } while (0)
@@ -80,7 +80,7 @@ int main(void)
     CHECK(journal_state("errlog") == J_NONE && journal_start("errlog") == 1);
     printf("clear empties: ok\n");
 
-    /* 4. a file over 16 KB is compacted at the load: one line per name, the frozen and skipped ones kept */
+    /* 4. loading a long history preserves it and every frozen/skipped entry */
     fresh();
     buf[0] = 0;
     for (int i = 0; i < 600; i++) strcat(buf, "done fill rc=0x00000000 ok=1\n");   /* 17,400 bytes */
@@ -90,22 +90,27 @@ int main(void)
     CHECK(journal_state("fill") == J_OK && journal_state("s") == J_SKIPPED && journal_state("f") == J_FROZEN);
     CHECK(journal_state("b") == J_BAD && journal_state("p") == J_FROZEN);
     file();
-    CHECK(strcmp(buf, "done fill rc=0x00000000 ok=1\nskip s\nfroze f\ndone b rc=0x00000000 ok=0\nfroze p\n") == 0);
-    printf("compaction over 16 KB: ok\n");
+    CHECK(strlen(buf) > 16000 && strstr(buf, "start p\nfroze p\n") != NULL);
+    printf("long history retained: ok\n");
 
-    /* 5. only the last 32 KB are read: a line before the tail is not seen, the newest ones are */
+    /* 5. freezes, declines and pending calls before the last 32 KB survive */
     fresh();
     buf[0] = 0;
-    strcat(buf, "start early\n");
+    strcat(buf, "start early\nfroze frozen\nskip declined\nstart completed\n");
     for (int i = 0; i < 1200; i++) strcat(buf, "done fill rc=0x00000000 ok=1\n");  /* 34,800 bytes: the tail cuts into them */
-    strcat(buf, "start late\n");
+    strcat(buf, "start late\ndone completed rc=0x00000000 ok=1\n");
     put(buf);
     journal_load();
-    CHECK(journal_state("early") == J_NONE);           /* its "start" is before the tail: no freeze recorded */
+    CHECK(journal_state("early") == J_FROZEN && journal_start("early") == 0);
+    CHECK(journal_state("frozen") == J_FROZEN && journal_start("frozen") == 0);
+    CHECK(journal_state("declined") == J_SKIPPED && journal_start("declined") == 0);
+    CHECK(journal_state("completed") == J_OK);
     CHECK(journal_state("fill") == J_OK && journal_state("late") == J_FROZEN);
     file();
-    CHECK(strcmp(buf, "done fill rc=0x00000000 ok=1\nfroze late\n") == 0);   /* compacted too */
-    printf("the 32 KB tail: ok\n");
+    CHECK(strlen(buf) > 32768);
+    journal_load();
+    CHECK(journal_start("early") == 0 && journal_start("frozen") == 0 && journal_start("declined") == 0);
+    printf("full history beyond 32 KB: ok\n");
 
     /* 6. a "done" after a "froze" keeps the freeze */
     fresh();
@@ -167,6 +172,40 @@ int main(void)
     CHECK(journal_state("couch_board_weather_pollen") == J_OK);
     CHECK(journal_state("couch_board_weather") == J_NONE);
     printf("a long name keeps its freeze: ok\n");
+
+    /* A failed write, sync, close or short write latches journal_io_failed
+     * until a clear or a reload; the call still runs (1). */
+    int *faults[] = { &stub_fail_writes, &stub_fail_sync, &stub_fail_close, &stub_short_writes };
+    for (unsigned i = 0; i < sizeof faults / sizeof faults[0]; i++) {
+        fresh();
+        CHECK(journal_io_failed() == 0);
+        *faults[i] = 1;
+        CHECK(journal_start("unrecorded") == 1);
+        CHECK(journal_io_failed() == 1);
+        *faults[i] = 0;
+        CHECK(journal_start("another") == 1 && journal_io_failed() == 1);
+        CHECK(journal_clear() == 0);
+        CHECK(journal_io_failed() == 0);
+    }
+    fresh();
+    journal_skip("declined");
+    stub_fail_reads = 1;
+    journal_load();
+    CHECK(journal_io_failed() == 1 && journal_start("new") == 1);
+    stub_fail_reads = 0;
+    journal_load();
+    CHECK(journal_io_failed() == 0 && journal_state("declined") == J_SKIPPED && journal_start("declined") == 0);
+    printf("I/O failures latch journal_io_failed, the calls still run: ok\n");
+
+    fresh();
+    put("start torn");
+    journal_load();
+    CHECK(journal_state("torn") == J_FROZEN);
+    CHECK(journal_start("next") == 1);
+    journal_done("next", 0, 1);
+    journal_load();
+    CHECK(journal_state("torn") == J_FROZEN && journal_state("next") == J_OK);
+    printf("unterminated last record: ok\n");
 
     unlink(path);
     rmdir(dir);

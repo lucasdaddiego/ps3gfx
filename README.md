@@ -54,7 +54,15 @@ the memory layout, the source of each RSX word and the shader recipe):
 `<ps3gfx/journal.h>`, the freeze journal (`journal.txt` in the app folder):
 - `J_NONE`, `J_PENDING`, `J_OK`, `J_BAD`, `J_FROZEN`, `J_SKIPPED`, `JOURNAL_NAMES` (64)
 - `journal_init` (called by `ui_init` with the app folder), `journal_load`, `journal_clear`, `journal_state`, `journal_skip`,
-  `journal_start`, `journal_done`, `journal_needed`
+  `journal_start`, `journal_done`, `journal_needed`, `journal_io_failed`
+
+The journal loader streams the complete file with bounded memory. It stays
+append-only until explicitly cleared so old freezes and declined calls remain
+recorded. `journal_start` returns 0 for a blocked call or when its start record
+A failed read, write, sync or close latches `journal_io_failed()` until a
+reload or a clear: the app can say that its freezes may go unrecorded. The
+calls still run, as before: a folder that cannot be written must not turn
+into "it froze this console before" in every app.
 
 `<ps3gfx/fs.h>`, whole files through the `sysLv2Fs*` syscalls:
 - `fs_write_file`, `fs_read_file`, `fs_selftest(dir, &mkdir_rc, &open_rc, &write_rc)`
@@ -247,7 +255,10 @@ then its screens: `read_pad`, `begin_frame`, `title`, the kit, `footer`,
 `ui_flip`. `ui_leave()` after `read_pad()` says exit (START or Quit Game),
 home (CIRCLE) or stay. A journaled call is `journal_start(name)`, the call,
 `journal_done(name, rc, ok)`; a call the console never ran goes behind
-`first_run_prompt`, and `journal_skip` remembers a decline. The library
+`first_run_prompt`, and `journal_skip` remembers a decline. Run the call only
+when `journal_start` returns 1. The loader streams the full journal with bounded memory;
+the file stays append-only until an explicit clear, preserving old freezes
+and declines even after long sessions. The library
 writes four files in the app folder: `starts.txt`, `journal.txt`,
 `safe_area.txt`, and `gfx_init.txt` only when the picture cannot start (the
 number of the failed init step, `source/gfx/README.md`). A call of the
@@ -516,8 +527,9 @@ against the installed copy.
 
 - `test/test_journal.c`: the freeze journal in a temp folder against the stub
   `sys/file.h` and `test/lv2fs_stub.c` (froze at the next load, a skip
-  persists, clear, compaction over 16 KB, the 32 KB tail, a done after froze,
-  a failed write, the name past the table, a name of 24 characters or more): `cc -std=c99 -Wall -Wextra -I tools/preview/stub -I source test/test_journal.c source/journal.c source/fs.c test/lv2fs_stub.c`.
+  persists, clear, complete histories beyond 32 KB, a done after froze,
+  write/sync/close/read failures latch `journal_io_failed`, a torn last line, the name past the table,
+  a name of 24 characters or more): `cc -std=c99 -Wall -Wextra -I tools/preview/stub -I source test/test_journal.c source/journal.c source/fs.c test/lv2fs_stub.c`.
 - `test/test_fs.c`: the one-line files of `fs_line.c` in a temp folder
   (a missing file, CR LF, no line end, an empty file, the edges, a cut at n,
   the 254-character limit, a write that replaces, a remove):
