@@ -25,6 +25,8 @@ static struct {
     u32 first, n;
 } open;
 
+long long gfx_be_us[2];
+
 int gfx_init(void)
 {
     cap = GFX_VTX_BYTES / sizeof(gfx_vtx);

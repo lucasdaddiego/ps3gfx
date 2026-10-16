@@ -44,6 +44,8 @@ typedef struct gfx_tex {
 extern int gfx_w, gfx_h;                     /* the output in pixels, set by gfx_init */
 
 int gfx_init(void);                          /* 0, or the number of the step that failed (gfx_be_init) */
+/* gfx_be_init's slow calls in microseconds: gcmInitBody, videoConfigure (0 on the host) */
+extern long long gfx_be_us[2];
 /* RSX memory that is never given back, and its RSX offset when offset is not
  * NULL; NULL when it does not fit. After gfx_init only one thread at a time
  * may call it (the app: the RSX memory test). */

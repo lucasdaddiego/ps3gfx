@@ -1040,14 +1040,23 @@ void safe_calibrate(int first)
     pressed = 0;                             /* a button still down is not a new press */
 }
 
+long long ui_init_us[UI_T_N];
+
 void ui_init(const ui_app *a)
 {
+    s64 t = sysGetSystemTime(), t1;
+#define UI_T(k) (t1 = sysGetSystemTime(), ui_init_us[k] = t1 - t, t = t1)
     app = *a;
     circle_tables();                         /* before any kit call */
     journal_init(app.dir);
+    UI_T(UI_T_JOURNAL);
     ioPadInit(7);
     sysUtilRegisterCallback(SYSUTIL_EVENT_SLOT0, sys_callback, NULL);
+    UI_T(UI_T_PAD);
     int step = gfx_init();
+    UI_T(UI_T_GFX);
+    ui_init_us[UI_T_GCM] = gfx_be_us[0];
+    ui_init_us[UI_T_VIDEO] = gfx_be_us[1];
     if (step) {                              /* no picture: the failed step goes to a file, for FTP */
         char p[128], s[40];
         sysLv2FsMkdir(app.dir, 0777);
@@ -1059,7 +1068,10 @@ void ui_init(const ui_app *a)
      * output scales the canvas, and linear sampling smooths it */
     text_linear = !(gfx_w == 1920 && gfx_h == 1080);
     if (fonts_init()) exit(0);
+    UI_T(UI_T_FONTS);
     safe_apply();
+    UI_T(UI_T_SAFE);
+#undef UI_T
 }
 
 void ui_end(void)

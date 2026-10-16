@@ -78,6 +78,9 @@ typedef struct {
     const char *dir;         /* the app folder: safe_area.txt, gfx_init.txt */
 } ui_app;
 void ui_init(const ui_app *a);
+/* ui_init's steps in microseconds, for an app's start log */
+enum { UI_T_JOURNAL, UI_T_PAD, UI_T_GFX, UI_T_GCM, UI_T_VIDEO, UI_T_FONTS, UI_T_SAFE, UI_T_N };
+extern long long ui_init_us[UI_T_N];
 void ui_end(void);
 
 /* text: y is the top of the line box; each call returns the x after the text */

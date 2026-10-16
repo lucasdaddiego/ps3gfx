@@ -8,6 +8,7 @@
 #include <ppu_intrinsics.h>
 #include <rsx/gcm_sys.h>
 #include <sysutil/video.h>
+#include <lv2/systime.h>
 #include "gfx.h"
 
 /* The IO area, main memory that the RSX reads: libgcm's first 4 KB, the
@@ -347,7 +348,9 @@ int gfx_be_init(u32 vtx_bytes, gfx_vtx **area)
     if (vtx_bytes > IO_BYTES - VTX_AT || GFX_RING_BYTES > VTX_AT - RING_AT || GFX_RING_BYTES < 0x1000) return 1;
     io = memalign(IO_BYTES, IO_BYTES);
     if (!io) return 2;
+    s64 t0 = (s64)sysGetSystemTime();
     if (gcmInitBody(&ctx, 0x10000, IO_BYTES, io)) return 3;
+    gfx_be_us[0] = (s64)sysGetSystemTime() - t0;
     if (gcmAddressToOffset(io, &io_off)) return 4;
     if (videoGetState(0, 0, &st) || videoGetResolution(st.displayMode.resolution, &res)) return 5;
     gfx_w = res.width;
@@ -359,7 +362,9 @@ int gfx_be_init(u32 vtx_bytes, gfx_vtx **area)
     vc.format = VIDEO_BUFFER_FORMAT_XRGB;
     vc.aspect = st.displayMode.aspect;
     vc.pitch = pitch;
+    t0 = (s64)sysGetSystemTime();
     if (videoConfigure(0, &vc, NULL, 0)) return 6;
+    gfx_be_us[1] = (s64)sysGetSystemTime() - t0;
     memset(&cfg, 0, sizeof cfg);
     gcmGetConfiguration(&cfg);               /* void in the firmware, so no result to test (PSL1GHT declares s32) */
     if (!cfg.localAddress || !cfg.localSize) return 7;

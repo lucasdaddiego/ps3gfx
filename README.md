@@ -31,6 +31,7 @@ the memory layout, the source of each RSX word and the shader recipe):
 
 `<ps3gfx/ui.h>`, the frame:
 - the app: `ui_app` (`name`, `version`, `dir`), `ui_init(const ui_app *)`, `ui_end`, `safe_calibrate(int first)`
+- `ui_init_us[UI_T_N]`: `ui_init`'s steps in microseconds (`UI_T_JOURNAL`, `UI_T_PAD`, `UI_T_GFX`, and in it `UI_T_GCM` for `gcmInitBody` and `UI_T_VIDEO` for `videoConfigure`, `UI_T_FONTS`, `UI_T_SAFE`), for an app's start log
 - `BTN_*`, the colours (`WHITE` to `BG_BOT`, `C_*`), the fonts `F_SMALL`, `F_BODY`, `F_MED`, `F_LARGE`, `F_TITLE`, `F_COUNT`, `TNUM`
 - the canvas: `SW`, `SH`, `MG`, `TOP`, `BOTTOM`, `Y_STATUS`, `Y_FOOTER`, `Y_NOTE`
 - the state: `quit`, `held`, `pressed`, `pad_last`, `pad_port`, `armed`, `ui_module`, `ui_demo`
