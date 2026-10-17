@@ -10,7 +10,7 @@
 #include <sys/stat.h>
 #include "fs.h"
 
-extern int stub_fail_sync, stub_fail_close, stub_short_writes;
+extern int stub_fail_sync, stub_fail_close, stub_fail_reads, stub_short_writes;
 
 static int fails;
 #define CHECK(c) do { if (!(c)) { printf("FAIL line %d: %s\n", __LINE__, #c); fails++; } } while (0)
@@ -31,7 +31,9 @@ static int line_is(const char *content, int n, const char *want)
 int main(void)
 {
     char buf[64], file[300];
-    snprintf(dir, sizeof dir, "%s/ps3gfx_fs_%d", getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp", (int)getpid());
+    const char *tmp = getenv("TMPDIR");
+    if (!tmp || strlen(tmp) > 64) tmp = "/tmp";                    /* a short folder: fs_selftest's path holds 127 characters */
+    snprintf(dir, sizeof dir, "%s/ps3gfx_fs_%d", tmp, (int)getpid());
     if (mkdir(dir, 0700)) { perror(dir); return 1; }
     snprintf(path, sizeof path, "%s/lp10.txt", dir);
 
@@ -47,6 +49,9 @@ int main(void)
     CHECK(line_is("  0123456789", 8, "01234"));                         /* the cut first, then the edges */
     put("x");
     CHECK(fs_read_line(path, buf, 0) == -1);
+    stub_fail_reads = 1;
+    CHECK(fs_read_file(path, buf, sizeof buf) == -1 && fs_read_line(path, buf, sizeof buf) == -1);   /* a read error: as missing */
+    stub_fail_reads = 0;
     printf("fs_read_line: ok\n");
 
     put("a much longer old content that the write must replace\n");
@@ -75,6 +80,15 @@ int main(void)
         CHECK(fs_selftest(dir, &mk, &op, &wr) != 0);
         *faults[i] = 0;
     }
+    int mk, op, wr;
+    stub_short_writes = 1;
+    CHECK(fs_selftest(dir, &mk, &op, &wr) == -1 && op == 0 && wr == -1);   /* a short write: write_rc -1 */
+    stub_short_writes = 0;
+    char longdir[200];
+    memset(longdir, 'd', 150);
+    longdir[150] = 0;
+    CHECK(fs_selftest(longdir, &mk, &op, &wr) == -1 && op == -1);          /* the path does not fit: open_rc -1 */
+    rmdir(longdir);
     CHECK(fs_write_file(path, "record\n", 7, 1) == 0);
     CHECK(fs_remove(path) == 0);
     snprintf(path, sizeof path, "%s/starts.txt", dir);

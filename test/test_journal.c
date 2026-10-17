@@ -13,6 +13,7 @@
 #include "journal.h"
 
 extern int stub_fail_writes, stub_fail_sync, stub_fail_close, stub_fail_reads, stub_short_writes;
+extern int stub_fail_once, stub_short_once;
 
 static int fails;
 #define CHECK(c) do { if (!(c)) { printf("FAIL line %d: %s\n", __LINE__, #c); fails++; } } while (0)
@@ -40,7 +41,9 @@ static void fresh(void)
 
 int main(void)
 {
-    snprintf(dir, sizeof dir, "%s/ps3gfx_journal_%d", getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp", (int)getpid());
+    const char *tmp = getenv("TMPDIR");
+    if (!tmp || strlen(tmp) > 64) tmp = "/tmp";                    /* a short folder: the journal's path holds 127 characters */
+    snprintf(dir, sizeof dir, "%s/ps3gfx_journal_%d", tmp, (int)getpid());
     if (mkdir(dir, 0700)) { perror(dir); return 1; }
     snprintf(path, sizeof path, "%s/journal.txt", dir);
     journal_init(dir);
@@ -149,16 +152,16 @@ int main(void)
     CHECK(journal_state(before) == J_NONE);
     printf("name %d shares slot %d: ok\n", JOURNAL_NAMES + 1, JOURNAL_NAMES - 1);
 
-    /* 9. a name of 24 characters or more: the file has it whole, the table and
-     * the loader its first 23, so the freeze holds; a polled one is journaled
-     * once; a name with the same first 23 characters shares its state */
+    /* 9. a name of 24 characters or more: the file, the table and the loader
+     * have its first 23, so the freeze holds; a polled one is journaled once;
+     * a name with the same first 23 characters shares its state */
     fresh();
     const char *lng = "couch_lp10_reconnect_tcp";                 /* 24 characters */
     CHECK(journal_start(lng) == 1);
     journal_load();
     CHECK(journal_state(lng) == J_FROZEN && journal_start(lng) == 0);
     file();
-    CHECK(strcmp(buf, "start couch_lp10_reconnect_tcp\nfroze couch_lp10_reconnect_tc\n") == 0);
+    CHECK(strcmp(buf, "start couch_lp10_reconnect_tc\nfroze couch_lp10_reconnect_tc\n") == 0);
     fresh();
     for (int i = 0; i < 40; i++)                                   /* 40 polls of a 24-character name */
         if (journal_needed("couch_board_weather_poll")) {
@@ -172,6 +175,95 @@ int main(void)
     CHECK(journal_state("couch_board_weather_pollen") == J_OK);
     CHECK(journal_state("couch_board_weather") == J_NONE);
     printf("a long name keeps its freeze: ok\n");
+
+    /* 10. a name counts up to its first space, in the file as in the table,
+     * so its freeze holds; a name of 71 characters or more keeps its line
+     * end, and the next record its own line */
+    fresh();
+    CHECK(journal_start("drive probe") == 1);
+    journal_load();
+    CHECK(journal_state("drive probe") == J_FROZEN && journal_start("drive probe") == 0);
+    CHECK(journal_state("drive") == J_FROZEN && journal_state("  drive") == J_FROZEN);
+    file();
+    CHECK(strcmp(buf, "start drive\nfroze drive\n") == 0);
+    fresh();
+    char huge[100];
+    memset(huge, 'h', 80);
+    huge[80] = 0;
+    CHECK(journal_start(huge) == 1);
+    journal_done(huge, 0, 1);
+    CHECK(journal_start("next") == 1);
+    journal_load();
+    CHECK(journal_state(huge) == J_OK && journal_state("next") == J_FROZEN);
+    printf("a name with a space, a name of 80 characters: ok\n");
+
+    /* 11. any ok but 0 is ok=1 in the file, as in the table */
+    fresh();
+    CHECK(journal_start("count") == 1);
+    journal_done("count", 0, 2);
+    CHECK(journal_state("count") == J_OK);
+    journal_load();
+    CHECK(journal_state("count") == J_OK);
+    printf("ok 2 reads back as J_OK: ok\n");
+
+    /* 12. a record that fails once is written again; after a short write it
+     * starts on a line of its own */
+    fresh();
+    CHECK(journal_start("a") == 1);
+    stub_short_once = 1;
+    journal_done("a", 0, 1);
+    CHECK(journal_io_failed() == 0);
+    stub_fail_once = 1;
+    CHECK(journal_start("b") == 1);
+    CHECK(journal_io_failed() == 0);
+    journal_load();
+    CHECK(journal_state("a") == J_OK && journal_state("b") == J_FROZEN);
+    file();
+    CHECK(strcmp(buf, "start a\ndone a rc=0x0\ndone a rc=0x00000000 ok=1\n\nstart b\nfroze b\n") == 0);   /* an empty line: harmless */
+    printf("a record written again: ok\n");
+
+    /* 13. a record cut twice (both writes short): the next record starts a
+     * line of its own, so its freeze holds */
+    fresh();
+    CHECK(journal_start("c") == 1);
+    stub_short_writes = 1;
+    journal_done("c", 0, 1);
+    stub_short_writes = 0;
+    CHECK(journal_io_failed() == 1);
+    CHECK(journal_start("d") == 1);
+    journal_load();
+    CHECK(journal_state("d") == J_FROZEN && journal_start("d") == 0);
+    printf("a torn record keeps the next one: ok\n");
+
+    /* 14. a torn last record when the writes fail: the freezes still hold */
+    fresh();
+    put("start probe\nsta");
+    stub_fail_writes = 1;
+    journal_load();
+    CHECK(journal_io_failed() == 1);
+    CHECK(journal_state("probe") == J_FROZEN && journal_start("probe") == 0);
+    stub_fail_writes = 0;
+    printf("a torn tail with failed writes keeps the freeze: ok\n");
+
+    /* 15. a clear whose sync fails keeps the table and latches io_failed */
+    fresh();
+    journal_skip("kept");
+    stub_fail_sync = 1;
+    CHECK(journal_clear() != 0);
+    stub_fail_sync = 0;
+    CHECK(journal_io_failed() == 1 && journal_state("kept") == J_SKIPPED);
+    printf("a failed clear latches: ok\n");
+
+    /* 16. a folder whose journal path does not fit: no file, io_failed, the
+     * calls still run */
+    char longdir[200];
+    memset(longdir, 'd', 150);
+    longdir[0] = '/';
+    longdir[150] = 0;
+    journal_init(longdir);
+    CHECK(journal_io_failed() == 1 && journal_start("x") == 1 && journal_clear() != 0);
+    journal_init(dir);
+    printf("a path too long: ok\n");
 
     /* A failed write, sync, close or short write latches journal_io_failed
      * until a clear or a reload; the call still runs (1). */

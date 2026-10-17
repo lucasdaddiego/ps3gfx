@@ -10,7 +10,11 @@
  * kept until SQUARE twice clears the journal. */
 enum { J_NONE, J_PENDING, J_OK, J_BAD, J_FROZEN, J_SKIPPED };
 
-#define JOURNAL_NAMES 64             /* the table: 64 names, each by its first 23 characters; more share the last slot */
+/* The table: 64 names; more share the last slot. A name counts up to its
+ * first space and at most 23 characters, in the file as in the table: names
+ * with the same cut form share one state, and a name with no character but
+ * spaces is never recorded. */
+#define JOURNAL_NAMES 64
 
 void journal_init(const char *dir);                    /* the app folder: the file is <dir>/journal.txt */
 void journal_load(void);                               /* streams the whole file with bounded memory; a "start" without a "done" becomes froze; the others call it once, at their first use */
@@ -18,8 +22,11 @@ int journal_clear(void);                               /* the clear gesture: an 
 int journal_state(const char *name);                   /* the J_* state of a named call */
 void journal_skip(const char *name);                   /* the first-run prompt was declined: remembered until the journal is cleared */
 int journal_start(const char *name);                   /* "start name" before the call: 1, or 0 for a frozen or skipped entry (do not run it) */
-void journal_done(const char *name, s32 rc, int ok);   /* "done name rc= ok=" after the call */
-int journal_io_failed(void);                           /* 1 after a read, write, sync or close of the journal failed (until a reload or clear): the history may be short, a freeze may go unrecorded */
+void journal_done(const char *name, s32 rc, int ok);   /* "done name rc= ok=" after the call (ok: 0 or not 0) */
+/* 1 after a read, or a record written twice, or a clear failed (until a
+ * reload or a clear): the history may be short, a freeze may go unrecorded,
+ * and a call whose done record failed shows as frozen at the next start */
+int journal_io_failed(void);
 int journal_needed(const char *name);                  /* a polled call is journaled when its state is not yet known in this session */
 
 #endif
