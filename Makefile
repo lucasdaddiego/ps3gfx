@@ -134,18 +134,22 @@ icons.o: icons.bin.o
 # gives 64), so the SPU ELF and its load segments start on a cache line for
 # the image import, as Cell Bench's program does. No header: source/spu_kit.h
 # declares spu_kit_spu and spu_kit_spu_size. The extension .spu keeps the
-# file out of the data/*.bin rule.
+# file out of the data/*.bin rule. bin2s writes a file, not a pipe: make's
+# shell has no pipefail, and a failed bin2s would assemble an empty member
+# (the same object either way).
 #---------------------------------------------------------------------------------
 spu_kit.spu.o	:	spu_kit.spu
 	@echo $(notdir $<)
-	@bin2s -a 128 $< | $(AS) -o $(@)
+	@bin2s -a 128 $< > $(@:.o=.s)
+	@$(AS) -o $(@) $(@:.o=.s)
 
 # The effects program (Couch 0.3.0): the same rule. source/spu_fx.h declares
 # spu_fx_spu and spu_fx_spu_size; an app that references neither links
 # neither this member nor the program.
 spu_fx.spu.o	:	spu_fx.spu
 	@echo $(notdir $<)
-	@bin2s -a 128 $< | $(AS) -o $(@)
+	@bin2s -a 128 $< > $(@:.o=.s)
+	@$(AS) -o $(@) $(@:.o=.s)
 
 -include $(DEPENDS)
 

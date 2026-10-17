@@ -12,6 +12,11 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# bash -eo pipefail: a failed command on the left of a pipe fails the step
+defaults:
+  run:
+    shell: bash
+
 jobs:
   host:
     name: Host test and preview smoke
@@ -45,7 +50,7 @@ jobs:
 
       - name: Host test (gfx's front end on a recording back end, an area of 409 vertices, the copy's rules)
         run: |
-          cc -std=c99 -Wall -Wextra -DGFX_VTX_BYTES=8192 -I tools/preview/stub -I source/gfx -o test_gfx test/test_gfx.c source/gfx/gfx.c
+          cc -std=c99 -Wall -Wextra -pthread -DGFX_VTX_BYTES=8192 -I tools/preview/stub -I source/gfx -o test_gfx test/test_gfx.c source/gfx/gfx.c
           ./test_gfx
 
       - name: Host test (the SPU kit's report and arguments, the local-store kernel with injected faults)
@@ -114,6 +119,11 @@ jobs:
           ls -la lib/libps3gfx.a "$PS3DEV/portlibs/ppu/lib/libps3gfx.a" "$PS3DEV/portlibs/ppu/include/ps3gfx" "$PS3DEV/portlibs/ppu/share/ps3gfx"
           cat "$PS3DEV/portlibs/ppu/share/ps3gfx/COMMIT"
 
+      # The SDK's cgcomp -a builds the three shader programs again: their words
+      # and the vertex program's masks must be gfx_rsx.c's.
+      - name: Shader programs (cgcomp gives the words of gfx_rsx.c)
+        run: zsh source/gfx/programs.zsh
+
       # make embeds the committed data/spu_kit.spu and needs no spu-gcc. Here
       # the bundle's spu-gcc builds the program again: a difference fails the
       # job, and the log then has the CI build in base64. A heap would start
@@ -160,8 +170,9 @@ jobs:
           ppu-nm lib/libps3gfx.a > nm.txt
           for s in gfx_init gfx_copy_to_main gfx_copy_to_main_job ui_init journal_start text_utf8 digits_init icons_init tex_round; do grep -Eq " [TD] $s\$" nm.txt || { echo "no $s in the archive"; exit 1; }; done
           for s in fonts_bin latin_bin digits_bin icons_bin spu_kit_spu spu_kit_spu_size spu_fx_spu spu_fx_spu_size; do grep -Eq " R $s\$" nm.txt || { echo "no $s in the archive"; exit 1; }; done
+          ppu-objdump -h lib/libps3gfx.a > objdump.txt   # a file: awk's early exit would cut the pipe (pipefail)
           for m in spu_kit spu_fx; do
-            ppu-objdump -h lib/libps3gfx.a | awk -v m="$m.spu.o:" '$1==m{f=1} f && $2==".rodata"{print $NF; exit}' | grep -qx '2\*\*7' || { echo "$m.spu.o: .rodata is not 128-byte aligned"; exit 1; }
+            awk -v m="$m.spu.o:" '$1==m{f=1} f && $2==".rodata"{print $NF; exit}' objdump.txt | grep -qx '2\*\*7' || { echo "$m.spu.o: .rodata is not 128-byte aligned"; exit 1; }
           done
           awk '$1=="U"{u[$2]=1} ($2 ~ /^[TRDBC]$/){d[$3]=1} END{for(s in u) if(!(s in d)) print s}' nm.txt | sort > undefined.txt
           cat > allowed.txt <<'EOF'
@@ -191,13 +202,11 @@ jobs:
           snprintf
           sqrtf
           sscanf
-          strcat
           strchr
           strcmp
           strlen
           strncmp
           strstr
-          strtok
           sysGetSystemTime
           sysThreadCreate
           sysThreadExit

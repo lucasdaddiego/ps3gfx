@@ -16,8 +16,10 @@ def ppm(path):
         while data[pos:pos + 1].isspace():
             pos += 1
         end = pos
-        while not data[end:end + 1].isspace():
+        while end < len(data) and not data[end:end + 1].isspace():
             end += 1
+        if end == pos:  # the data ended inside the header
+            sys.exit(f"{path}: a short PPM header")
         tokens.append(data[pos:end])
         pos = end
     if tokens[0] != b"P6" or tokens[3] != b"255":

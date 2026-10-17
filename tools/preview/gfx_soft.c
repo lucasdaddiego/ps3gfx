@@ -9,6 +9,7 @@
  *     from before the last drain draws nothing, and the snapshot shows it.
  *   - gfx_copy_to_main is a memcpy out of the arena.
  * PV_STAT=1 prints the vertices, draws and drains per frame at exit. */
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -73,7 +74,10 @@ int gfx_be_init(u32 vtx_bytes, gfx_vtx **out)
     gfx_h = r.height;
     u32 pitch = 4 * ((gfx_w + 15) / 16 * 16);
     void *a = NULL;
-    arena = calloc(1, LOCAL_SIZE);
+    /* on a 128-byte line, as RSX local memory: glibc starts a large calloc 16
+     * bytes into its page, and gfx_copy_to_main refuses a src off a line */
+    u8 *raw = calloc(1, LOCAL_SIZE + 128);
+    if (raw) arena = (u8 *)(((uintptr_t)raw + 127) & ~(uintptr_t)127);
     if (posix_memalign(&a, 128, vtx_bytes) == 0) area = a;   /* on a 128-byte line, as gfx_rsx.c's area */
     rv = malloc(vtx_bytes / sizeof(gfx_vtx) * sizeof *rv);
     if (!arena || !area || !rv) return -1;
