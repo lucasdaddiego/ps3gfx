@@ -83,7 +83,9 @@ enum { UI_T_JOURNAL, UI_T_PAD, UI_T_GFX, UI_T_GCM, UI_T_VIDEO, UI_T_FONTS, UI_T_
 extern long long ui_init_us[UI_T_N];
 void ui_end(void);
 
-/* text: y is the top of the line box; each call returns the x after the text */
+/* text: y is the top of the line box; text, text_c and text_fit return the x
+ * after the text, text_r the x where it starts. Without text_utf8 the text is
+ * bytes: ASCII, and a byte past 0x7f draws '?'. */
 float text(float x, float y, int font, u32 color, const char *fmt, ...) __attribute__((format(printf, 5, 6)));
 float text_r(float xr, float y, int font, u32 color, const char *fmt, ...) __attribute__((format(printf, 5, 6)));
 float text_c(float xc, float y, int font, u32 color, const char *fmt, ...) __attribute__((format(printf, 5, 6)));
@@ -101,9 +103,11 @@ int text_wrap_lines(int font, float maxw, int maxlines, const char *s);   /* the
  * the euro, OE ...) and the primes draw from a second atlas per font; a letter
  * of Latin Extended-A draws as its base letter; a combining mark and a
  * zero-width code point draw nothing; any other code point, an invalid byte
- * and U+FFFD draw a white square; a sequence cut by the 320-byte format
- * buffer draws nothing. Widths, text_fit and text_wrap count code points. 0,
- * or -1 when latin.bin is bad or RSX memory is short (the text stays ASCII). */
+ * and U+FFFD draw a white square; a sequence that the end of the text cuts
+ * (the 320-byte format buffer's cut, or the end of a string) draws nothing.
+ * Widths, text_fit and text_wrap count code points. 0, or -1 when latin.bin
+ * is bad or RSX memory is short (the text stays bytes); a call after a
+ * failed one returns -1 at once and takes no more RSX memory. */
 int text_utf8(void);
 int wrap_step(int font);              /* text_wrap's line step: line_h + line_h / 6; the lines drawn times it is the height */
 int text_w(int font, const char *s);
@@ -167,14 +171,18 @@ void ui_flip(void);
 void ui_submit(void);
 /* The wait for a ui_submit frame now, with its times (ui_stats): an app calls
  * it before it writes a vertex or a texel that the frame reads. begin_frame
- * and ui_shot call it. It returns at once when no frame waits. */
+ * and ui_shot call it. It returns at once when no frame waits. Call it also
+ * before gfx_copy_to_main or a gfx_prim outside a frame: they wait too, but
+ * ui_stats then counts that wait as busy time. */
 void ui_wait(void);
 
 /* A screenshot: the colour buffer on the TV (gfx_front) as a binary PPM at
  * path. Call it between ui_flip (or ui_submit: it waits for that frame
- * first) and the next begin_frame. The app stops for
- * about 1.4 s at 1080p (0.6 s at 720p): the reads of RSX memory and the file.
- * 0, or the LV2 rc (-1: no buffer or no memory for the rows). */
+ * first) and the next begin_frame. The rows come to main memory by the RSX's
+ * copy (gfx_copy_to_main), 64 at a time; when a copy fails, ui_shot reads
+ * them through the mapping, and the app stops for about 1.4 s at 1080p (0.6 s
+ * at 720p). 0, or the LV2 rc of the open, a write, the sync or the close (-1:
+ * no buffer, no memory for the rows, or a short write). */
 int ui_shot(const char *path);
 
 /* The times of the frames, from the system clock in microseconds. A frame
@@ -197,7 +205,10 @@ typedef struct {
 void ui_stats(ui_stat *s, int reset);
 
 void read_pad(void);
-unsigned gesture(unsigned buttons);  /* returns the button that fired, 0 otherwise */
+/* Two presses of one button: the first arms, the second fires at a later
+ * read_pad, any other button disarms. Returns the button that fired, 0
+ * otherwise; a press fires only for a call whose buttons it is in. */
+unsigned gesture(unsigned buttons);
 int ui_leave(void);                  /* after read_pad: -1 exit (START or Quit Game), 0 home (CIRCLE), 1 stay */
 /* A held button repeats: pad_repeat returns the buttons of mask that went
  * down this frame, and the held ones again after 350 ms, then every 30 ms (the

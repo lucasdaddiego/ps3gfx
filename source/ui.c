@@ -7,7 +7,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include <ppu-lv2.h>
 #include <sys/file.h>
 #include <io/pad.h>
 #include <sysutil/sysutil.h>
@@ -134,10 +133,12 @@ static int fonts_init(void)
     return 0;
 }
 
-/* The atlas slot of a character; with TNUM, digits take their tabular slot (128 + d). */
+/* The atlas slot of a character; with TNUM, digits take their tabular slot
+ * (128 + d). A byte past ASCII is '?': the tabular slots are no characters. */
 static int glyph(int font, unsigned char c)
 {
-    if ((font & TNUM) && c >= '0' && c <= '9') c = 128 + c - '0';
+    if (c >= 128) c = '?';
+    else if ((font & TNUM) && c >= '0' && c <= '9') c = 128 + c - '0';
     int k = c - font_first;
     return k < 0 || k >= font_count ? '?' - font_first : k;
 }
@@ -146,9 +147,20 @@ static int adv(int font, unsigned char c) { return fonts[font & 0xff].adv[glyph(
 
 static int width_utf8(int font, const char *s, int n);
 
+/* With text_utf8 on: 1 when s[0..n) has a byte past ASCII, so the UTF-8 paths
+ * run. ASCII keeps the byte paths, which give it the same widths, cuts and
+ * vertices, with no decode. */
+static int utf8_n(const char *s, int n)
+{
+    if (!latin) return 0;
+    for (int i = 0; i < n && s[i]; i++)
+        if (s[i] & 0x80) return 1;
+    return 0;
+}
+
 static int width_n(int font, const char *s, int n)
 {
-    if (latin) return width_utf8(font, s, n);
+    if (utf8_n(s, n)) return width_utf8(font, s, n);
     int w = 0;
     for (int i = 0; i < n && s[i]; i++) w += adv(font, s[i]);
     return w;
@@ -252,30 +264,42 @@ UTF8 int fit_utf8(int font, const char *s, float maxw, int *brk, int *first)
     return n;
 }
 
-/* run() in UTF-8 mode, in two passes: the glyphs of the font's atlas, then
- * those of its Latin atlas, so a line binds each atlas once. */
+/* run() in UTF-8 mode, in two passes: the glyphs of the font's atlas (from
+ * run()'s table, the same numbers), then those of its Latin atlas, so a line
+ * binds each atlas once; the second pass only when the line has a glyph of
+ * the Latin atlas. */
 UTF8 float run_utf8(float x, float y, int font, u32 color, const char *s, int n)
 {
     const font_t *f = &fonts[font & 0xff];
     const ui_atlas *l = &latin[font & 0xff];
-    float px = floorf(x + 0.5f);
-    for (int pass = 0; pass < 2; pass++) {
+    const glyph_t *gt = glyphs[font & 0xff];
+    float px = 0;
+    int more = 0;                            /* a glyph of the Latin atlas: the second pass */
+    for (int pass = 0; pass < 1 + more; pass++) {
         int cw = pass ? l->cw : f->cw, ch = pass ? l->ch : f->ch, pad = pass ? l->pad : f->pad;
-        int cols = pass ? l->cols : font_cols;
         float top = floorf(y + 0.5f) + (pass ? l->asc - l->base : f->asc - f->base);
-        float du = (float)cw / (pass ? l->aw : f->aw), dv = (float)ch / (pass ? l->ah : f->ah);
+        float du = (float)cw / l->aw, dv = (float)ch / l->ah;   /* the Latin atlas's */
         px = floorf(x + 0.5f);
         gfx_texture(pass ? &l->tex : &f->tex);
         for (int i = 0, len, which, k; i < n && s[i]; i += len) {
             int a = glyph_utf8(font, s, n, i, &len, &which, &k);
+            more |= which == 1;
             if (which == pass && s[i] != ' ') {
-                float u = (k % cols) * du, v = (k / cols) * dv;
                 float x0 = px - pad, x1 = x0 + cw, y1 = top + ch;
                 gfx_vtx *q = gfx_prim(GFX_QUADS, 4);
-                q = gfx_put(q, x0, top, color, u, v);
-                q = gfx_put(q, x1, top, color, u + du, v);
-                q = gfx_put(q, x1, y1, color, u + du, v + dv);
-                gfx_put(q, x0, y1, color, u, v + dv);
+                if (pass) {
+                    float u = (k % l->cols) * du, v = (k / l->cols) * dv;
+                    q = gfx_put(q, x0, top, color, u, v);
+                    q = gfx_put(q, x1, top, color, u + du, v);
+                    q = gfx_put(q, x1, y1, color, u + du, v + dv);
+                    gfx_put(q, x0, y1, color, u, v + dv);
+                } else {
+                    const glyph_t *g = &gt[k];
+                    q = gfx_put(q, x0, top, color, g->u0, g->v0);
+                    q = gfx_put(q, x1, top, color, g->u1, g->v0);
+                    q = gfx_put(q, x1, y1, color, g->u1, g->v1);
+                    gfx_put(q, x0, y1, color, g->u0, g->v1);
+                }
             }
             px += a;
         }
@@ -287,7 +311,7 @@ UTF8 float run_utf8(float x, float y, int font, u32 color, const char *s, int n)
  * run; each cell lands on whole pixels. */
 static float run(float x, float y, int font, u32 color, const char *s, int n)
 {
-    if (latin) return run_utf8(x, y, font, color, s, n);
+    if (utf8_n(s, n)) return run_utf8(x, y, font, color, s, n);
     const font_t *f = &fonts[font & 0xff];
     const glyph_t *gt = glyphs[font & 0xff];
     float px = floorf(x + 0.5f), top = floorf(y + 0.5f) + f->asc - f->base;
@@ -308,10 +332,28 @@ static float run(float x, float y, int font, u32 color, const char *s, int n)
     return px;
 }
 
-/* The text calls format into 320 bytes: a longer text is cut at 319. */
-#define VFORMAT(buf, fmt, ap) \
-    char buf[320];            \
-    vsnprintf(buf, sizeof buf, fmt, ap)
+/* The text calls format into 320 bytes: a longer text is cut at 319. A
+ * plain "%s" (a title, a heading, a footer item) skips vsnprintf: the same
+ * bytes, cut at the same place. The text is s[0..n): s[n] may be no 0. */
+static const char *vformat(char *buf, int *n, const char *fmt, va_list ap)
+{
+    if (fmt[0] == '%' && fmt[1] == 's' && !fmt[2]) {
+        const char *s = va_arg(ap, const char *);
+        int k = 0;
+        if (!s) s = "(null)";                /* as newlib's vsnprintf */
+        while (k < 319 && s[k]) k++;
+        *n = k;
+        return s;
+    }
+    vsnprintf(buf, 320, fmt, ap);
+    *n = (int)strlen(buf);
+    return buf;
+}
+
+#define VFORMAT(s, n, fmt, ap) \
+    char s##_buf[320];         \
+    int n;                     \
+    const char *s = vformat(s##_buf, &n, fmt, ap)
 
 #define VCALL(r, call)       \
     do {                     \
@@ -323,32 +365,31 @@ static float run(float x, float y, int font, u32 color, const char *s, int n)
 
 float vtext(float x, float y, int font, u32 color, const char *fmt, va_list ap)
 {
-    VFORMAT(s, fmt, ap);
-    return run(x, y, font, color, s, (int)strlen(s));
+    VFORMAT(s, n, fmt, ap);
+    return run(x, y, font, color, s, n);
 }
 
 float vtext_r(float xr, float y, int font, u32 color, const char *fmt, va_list ap)
 {
-    VFORMAT(s, fmt, ap);
-    float x = xr - text_w(font, s);
-    run(x, y, font, color, s, (int)strlen(s));
+    VFORMAT(s, n, fmt, ap);
+    float x = xr - width_n(font, s, n);
+    run(x, y, font, color, s, n);
     return x;
 }
 
 float vtext_c(float xc, float y, int font, u32 color, const char *fmt, va_list ap)
 {
-    VFORMAT(s, fmt, ap);
-    return run(xc - text_w(font, s) / 2, y, font, color, s, (int)strlen(s));
+    VFORMAT(s, n, fmt, ap);
+    return run(xc - width_n(font, s, n) / 2, y, font, color, s, n);
 }
 
 /* Cut with "..." when the text is wider than maxw. */
 float vtext_fit(float x, float y, int font, u32 color, float maxw, const char *fmt, va_list ap)
 {
-    VFORMAT(s, fmt, ap);
-    int len = (int)strlen(s);
-    if (text_w(font, s) <= maxw) return run(x, y, font, color, s, len);
+    VFORMAT(s, len, fmt, ap);
+    if (width_n(font, s, len) <= maxw) return run(x, y, font, color, s, len);
     int ell = text_w(font, "..."), n = 0, w = 0;
-    if (latin) n = cut_utf8(font, s, len, ell, maxw);
+    if (utf8_n(s, len)) n = cut_utf8(font, s, len, ell, maxw);
     else
         while (n < len && w + adv(font, s[n]) + ell <= maxw) w += adv(font, s[n++]);
     while (n > 0 && s[n - 1] == ' ') n--;
@@ -386,10 +427,10 @@ float text_fit(float x, float y, int font, u32 color, float maxw, const char *fm
 /* Greedy word wrap to maxw, also at '\n': the lines, drawn when draw is 1. */
 static int wrap(float x, float y, int font, u32 color, float maxw, int maxlines, const char *s, int draw)
 {
-    int lines = 0, step = wrap_step(font);
+    int lines = 0, step = wrap_step(font), u8 = utf8_n(s, 0x7fffffff);
     while (*s && lines < maxlines) {
         int n = 0, w = 0, brk = -1, first = 1;
-        if (latin) n = fit_utf8(font, s, maxw, &brk, &first);
+        if (u8) n = fit_utf8(font, s, maxw, &brk, &first);
         else
             while (s[n] && s[n] != '\n') {
                 int a = adv(font, s[n]);
@@ -569,7 +610,7 @@ void round_frame(float x, float y, float w, float h, float r, float t, u32 c)
     round_pts(x + t, y + t, w - 2 * t, h - 2 * t, r - t, seg, in);
     gfx_vtx *q = shape(GFX_TRIANGLE_STRIP, 2 * (n + 1));
     for (int k = 0; k <= n; k++) {
-        int i = k % n;
+        int i = k < n ? k : 0;               /* k % n with no division */
         q = gfx_put(q, o[i * 2], o[i * 2 + 1], c, 0, 0);
         q = gfx_put(q, in[i * 2], in[i * 2 + 1], c, 0, 0);
     }
@@ -620,7 +661,10 @@ void poly_fan(float cx, float cy, const float *pts, int n, u32 c)
         int e = n - s > GFX_PRIM_MAX - 2 ? s + GFX_PRIM_MAX - 2 : n;
         gfx_vtx *q = shape(GFX_TRIANGLE_FAN, e - s + 2);
         q = gfx_put(q, cx, cy, c, 0, 0);
-        for (int k = s; k <= e; k++) q = gfx_put(q, pts[(k % n) * 2], pts[(k % n) * 2 + 1], c, 0, 0);
+        for (int k = s; k <= e; k++) {
+            int i = k < n ? k : 0;           /* k % n with no division: k is at most n */
+            q = gfx_put(q, pts[i * 2], pts[i * 2 + 1], c, 0, 0);
+        }
     }
 }
 
@@ -1029,7 +1073,7 @@ void safe_calibrate(int first)
                   "Move the edges until the four arrow tips touch the edges of your TV picture. The app then draws "
                   "every screen inside them, pixel for pixel.");
         if (single) text(x + 40, y + 190, F_BODY, YELLOW, "One edge at a time: the %s edge. L1/R1 choose the edge, the D-pad moves it.", names[sel]);
-        else text(x + 40, y + 190, F_BODY, WHITE, "D-pad: LEFT/RIGHT narrower or wider, UP/DOWN shorter or taller.");
+        else text(x + 40, y + 190, F_BODY, WHITE, "D-pad: LEFT/RIGHT narrower or wider, UP/DOWN taller or shorter.");
         text(x + 40, y + 236, F_SMALL | TNUM, GREY, "left %d   top %d   right %d   bottom %d   =   %d x %d of 1920 x 1080", e[0], e[1], e[2],
              e[3], e[2] - e[0], e[3] - e[1]);
         footer_at(x + 40, y + 300, single ? "CROSS save  SQUARE both sides  TRIANGLE whole screen" : "CROSS save  SQUARE one edge  TRIANGLE whole screen");
@@ -1037,7 +1081,7 @@ void safe_calibrate(int first)
         ui_flip();
     }
     safe_override(0);
-    pressed = 0;                             /* a button still down is not a new press */
+    pressed = armed = 0;                     /* a button still down is not a new press */
 }
 
 long long ui_init_us[UI_T_N];
@@ -1083,25 +1127,34 @@ void ui_end(void)
 
 /* ---- pad ------------------------------------------------------------------ */
 
+static unsigned pad_reads, armed_at;         /* read_pad's count, and the read whose press armed a gesture */
+
+/* The first connected pad. No new data (len 0, or a failed read) keeps the
+ * buttons as they were; no pad releases them, so a button held when the pad
+ * went away does not stay down. */
 void read_pad(void)
 {
     padInfo info;
     padData pd;
     unsigned now = held;
     sysUtilCheckCallback();
-    ioPadGetInfo(&info);
-    for (int n = 0; n < MAX_PADS; n++)
-        if (info.status[n]) {
-            ioPadGetData(n, &pd);
-            if (pd.len > 0) {
-                now = pd.button[2] << 8 | (pd.button[3] & 0xff);
-                pad_last = pd;
-                pad_port = n;
+    if (ioPadGetInfo(&info) == 0) {
+        now = 0;
+        for (int n = 0; n < MAX_PADS; n++)
+            if (info.status[n]) {
+                now = held;
+                if (ioPadGetData(n, &pd) == 0 && pd.len > 0) {
+                    now = pd.button[2] << 8 | (pd.button[3] & 0xff);
+                    pad_last = pd;
+                    pad_port = n;
+                }
+                break;
             }
-            break;
-        }
+    }
     pressed = now & ~held;
     held = now;
+    pad_reads++;
+    if (pressed & ~armed) armed = 0;         /* any other button disarms a gesture, also in a frame that calls none */
 }
 
 int ui_leave(void)
@@ -1127,13 +1180,20 @@ unsigned pad_repeat(pad_rep *r, unsigned mask)
     return down;
 }
 
-/* Two-press gestures: the first press arms, the same button fires, any other
- * button disarms. Returns the button that fired this frame, 0 otherwise. */
+/* Two-press gestures: the first press arms, the same button fires at a later
+ * read_pad, any other button disarms. Returns the button that fired this
+ * frame, 0 otherwise. A press fires only for a call whose buttons it is in,
+ * and never in the read that armed it (two calls in one frame). */
 unsigned gesture(unsigned buttons)
 {
     if (!pressed) return 0;
-    if (pressed == armed) { armed = 0; return pressed; }
+    if (pressed == armed) {
+        if (armed_at == pad_reads || !(pressed & buttons)) return 0;
+        armed = 0;
+        return pressed;
+    }
     armed = (pressed & buttons) && !(pressed & ~buttons) ? pressed : 0;
+    armed_at = pad_reads;
     return 0;
 }
 
@@ -1141,7 +1201,7 @@ unsigned gesture(unsigned buttons)
 
 volatile int job_cancel;
 static volatile int job_done, job_pct = -1;
-static const char *volatile job_msg;        /* string literals only: no lifetime to manage */
+static const char *volatile job_msg;        /* a string literal or a static buffer: no lifetime to manage */
 
 void progress(const char *msg) { job_msg = msg; }
 void job_set_percent(int pct) { job_pct = pct; }
@@ -1164,8 +1224,9 @@ static void draw_job(double sec, int cancelable)
     spinner(MG + 34, y + 32, 28, sec);
     text(MG + 92, y, F_LARGE | TNUM, WHITE, "%.1f s", sec);
     y += 116;
-    if (job_pct >= 0) {
-        int p = job_pct > 100 ? 100 : job_pct;
+    int p = job_pct;                         /* one read: the job thread may change it */
+    if (p >= 0) {
+        if (p > 100) p = 100;
         bar(MG, y, SW - 2 * MG, 16, p / 100.0f, GREEN);
         text(MG, y + 30, F_BODY | TNUM, GREY, "%d%%", p);
         y += 96;
@@ -1190,6 +1251,7 @@ static void job_run(const char *msg, void (*fn)(void), int cancelable)
         draw_job(0, 0);                      /* no thread: one frame, then the call in this thread */
         fn();
         job_pct = -1;
+        pressed = armed = 0;
         return;
     }
     while (!job_done) {
@@ -1201,7 +1263,7 @@ static void job_run(const char *msg, void (*fn)(void), int cancelable)
     }
     sysThreadJoin(t, &ret);
     job_pct = -1;
-    pressed = 0;                             /* a button still down is not a new press */
+    pressed = armed = 0;                     /* a button still down is not a new press */
 }
 
 void run_job(const char *msg, void (*fn)(void)) { job_run(msg, fn, 0); }

@@ -45,11 +45,9 @@ static const u8 *align4(const u8 *p) { return p + (4 - (p - latin_bin) % 4) % 4;
 
 /* latin.bin into RSX textures as fonts_init does fonts.bin: 4-bit alpha to
  * A4R4G4B4, white, bilinear unless the output is 1080p. */
-int text_utf8(void)
+static int load(void)
 {
-    static int done;
     const u8 *p = latin_bin, *end = latin_bin + latin_bin_size;
-    if (done) return 0;
     if (latin_bin_size < 12 || memcmp(p, "PHL1", 4)) return -1;
     int n = rd16(p + 4), count = rd16(p + 6), cols = rd16(p + 8);
     if (n < F_COUNT || count < 1 || count > UI_LATIN_MAX || !cols) return -1;
@@ -89,7 +87,16 @@ int text_utf8(void)
     ncp = count;
     square = map(0x25a1);
     if (square < 0 || square >= count) return -1;
-    done = 1;
     ui_text_latin(atlas, map);
     return 0;
+}
+
+/* The first call loads; a later one gives its result again. A failed load
+ * keeps the RSX memory it took (gfx_vram gives none back), so it is not
+ * tried again. */
+int text_utf8(void)
+{
+    static int done;                         /* 1 loaded, -1 failed */
+    if (!done) done = load() ? -1 : 1;
+    return done > 0 ? 0 : -1;
 }

@@ -73,8 +73,10 @@ the context, the display buffers and the flip.
   read.
 - `gfx_front` gives the colour buffer on the TV between frames: after
   `gfx_end` (or `gfx_wait`) that is the buffer that `back` no longer names. The kit's
-  `ui_shot` reads it into a PPM; the PPU reads RSX memory at about 0.5 us a
-  word, so a 1080p picture takes about 1 s.
+  `ui_shot` copies it into main memory with `gfx_copy_to_main`, 64 rows a
+  round, and writes a PPM. When a copy fails it reads the rest through the
+  mapping: the PPU reads RSX memory at about 0.5 us a word, so a 1080p
+  picture then takes about 1 s.
 - Each check of the init has its own step number. When one fails, the app
   writes the number to `gfx_init.txt` in its folder, because it has no
   picture to show it. Note: `gcmGetConfiguration` returns nothing in the
