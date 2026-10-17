@@ -21,7 +21,9 @@ python3 tools/preview/diff.py A B [D]             # pixel diff of two snapshot f
 fine), the library's `source/*.c`, the world and `gfx.c`
 with its API renamed to `gfx_real_*` (the trace wrapper below). The sandbox
 must hold the parents of the app folder (`mkdir -p $sandbox/dev_hdd0/tmp`):
-`sysLv2FsMkdir` makes one level, as on the console. `smoke/` is the smallest
+`sysLv2FsMkdir` makes one level, as on the console. `sysLv2FsStat` fills
+the mode (the type and permission bits: LV2's octal values are POSIX's), the
+owner, the times, the size and the block size from the host's `stat`. `smoke/` is the smallest
 app (one screen); CI builds it and takes one snapshot. `kitcheck/` calls the
 kit and checks the results against the headers' rules; CI runs it and it
 exits 1 on a failed check. An app keeps its own
@@ -39,7 +41,10 @@ The weak list is at the end of `stubs.c`: every socket call of PSL1GHT's
 `net/net.h` that a TCP or UDP client uses (also `netPoll`, `netSelect`,
 `netGetSockOpt`, `netShutdown`, `netErrnoLoc` for `net_errno`), each failing,
 and the stub headers have PSL1GHT's constants (`SO_ERROR`, `MSG_DONTWAIT`,
-`NET_EWOULDBLOCK` ...), so an app's network code compiles in the preview. Also weak:
+`NET_EWOULDBLOCK` ...), so an app's network code compiles in the preview.
+`htonl`, `htons`, `ntohl` and `ntohs` change nothing, as on the big-endian
+console, in any include order (the stub `arpa/inet.h` replaces the
+byte-swapping macros of macOS's `<sys/types.h>`). Also weak:
 `sysUtilGetSystemParamInt` with the `SYSUTIL_SYSTEMPARAM_ID_*` ids, which answers a console at
 UTC-3 with 24-hour time (TIMEZONE -180, SUMMERTIME 0, TIME_FORMAT 1).
 
@@ -124,7 +129,9 @@ ui_flip). The waits inside `gfx.c` (in `gfx_begin`, `gfx_end`, and in
 `gfx_prim` or `gfx_block` outside a frame) write none. A replay calls
 `gfx_submit` and `gfx_wait` for these lines. The vertex lines of a
 `gfx_prim` or a `gfx_block` go out at the app's next gfx call (then they are
-written).
+written). A `gfx_prim` or a `gfx_block` that returns NULL (`gfx.c` refused
+its arguments, before any other effect) writes no line, so a replay stays in
+step.
 A `gfx_vram` from a job thread (an RSX memory test) can sit between two calls
 of a frame. A replay maps the offset of a `gfx_texture` line to the offset
 that its own `gfx_vram` gave for the same call (a layout other than the

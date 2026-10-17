@@ -2,7 +2,9 @@
  * end-to-end check of the trace harness (the format is in README.md).
  * build.zsh compiles source/gfx/gfx.c with its API renamed to gfx_real_*,
  * and these wrappers write the trace and call it. The vertices of a gfx_prim
- * go out with its line at the app's next gfx call: then they are written.
+ * go out with its line at the app's next gfx call: then they are written. A
+ * gfx_prim or gfx_block that returns NULL (its arguments refused, before any
+ * other effect) writes no line, so a replay stays in step.
  * gfx_vram (gfx_soft.c) writes its own line and may come from another thread. */
 #include <stdio.h>
 #include <stdlib.h>
@@ -76,7 +78,7 @@ static void flush_prim(void)                         /* the mutex is held */
     if (!pend_n) return;
     if (pend_block) line("gfx_block %d %ld %u", pend_type, pend_n, pend_align);
     else line("gfx_prim %d %ld", pend_type, pend_n);
-    for (int i = 0; pend && i < pend_n; i++)
+    for (int i = 0; i < pend_n; i++)
         line("v %a %a 0x%08x %a %a", pend[i].x, pend[i].y, pend[i].rgba, pend[i].u, pend[i].v);
     pend_n = 0;
 }
@@ -176,7 +178,7 @@ gfx_vtx *gfx_prim(int type, int n)
     pthread_mutex_unlock(&mu);
     gfx_vtx *p = gfx_real_prim(type, n);
     pthread_mutex_lock(&mu);
-    if (tf) pend = p, pend_type = type, pend_n = n, pend_block = 0;
+    if (tf && p) pend = p, pend_type = type, pend_n = n, pend_block = 0;
     pthread_mutex_unlock(&mu);
     return p;
 }
@@ -190,7 +192,7 @@ gfx_vtx *gfx_block(int type, u32 n, u32 align)
     pthread_mutex_unlock(&mu);
     gfx_vtx *p = gfx_real_block(type, n, align);
     pthread_mutex_lock(&mu);
-    if (tf) pend = p, pend_type = type, pend_n = n, pend_block = 1, pend_align = align;
+    if (tf && p) pend = p, pend_type = type, pend_n = n, pend_block = 1, pend_align = align;
     pthread_mutex_unlock(&mu);
     return p;
 }

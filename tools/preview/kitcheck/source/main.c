@@ -9,6 +9,9 @@
  * passed" and exits 0 after frame 100. Frame 50's ui_shot, shot.ppm in the
  * app folder, must equal the snapshot kit.ppm byte for byte (CI: cmp).
  * Before them, gfx_copy_to_main between frames (a memcpy here).
+ * Then gesture's two presses on the same pad frames, the text calls' returns
+ * and the bytes past ASCII before text_utf8, and at the end a run_job whose
+ * job copies by gfx_copy_to_main_job.
  * After the pad's frames: the display digits, the icons and fx.h, checked
  * on the vertices each call writes (the frame's vertex area is contiguous:
  * a mark before and after a call holds them), and the RSX memory that
@@ -18,6 +21,8 @@
 #include <stdint.h>
 #include <math.h>
 #include <string.h>
+#include <unistd.h>
+#include <sys/wait.h>
 #include <net/net.h>
 #include <sysutil/sysutil.h>
 #include <ps3gfx/ui.h>
@@ -181,8 +186,7 @@ static void utf8(void)
     int w1 = text_w(F_BODY, "\xc3\xb3"), ell = text_w(F_BODY, "...");
     for (int m = 0; m <= 8 * w1 + ell; m += 3) {               /* text_fit cuts between code points */
         float x = text_fit(0, 0, F_BODY, WHITE, (float)m, "%s", oo);
-        int k = ((int)x - ell) / w1;
-        CHECK((int)x == 8 * w1 || ((int)x - ell) % w1 == 0 || (k == 0 && (int)x == ell));
+        CHECK((int)x == 8 * w1 || ((int)x - ell) % w1 == 0);
     }
     CHECK(text_wrap_lines(F_LARGE, 5, 4, "\xc5\x92\xc5\x92\xc5\x92") == 3);   /* too wide: one whole code point a line */
     CHECK(text_wrap_lines(F_BODY, 2000, 4, "\xc3\xb3 \xc3\xb3\n\xc3\xb1") == 2);
@@ -241,14 +245,144 @@ static u32 vram_at(void)
     return off;
 }
 
+/* ---- the text calls' returns, the bytes past ASCII, the "%s" path -------- */
+
+static gfx_vtx cap2[1024];
+
+/* text and text_c return the x after the text, text_r the x where it starts;
+ * before text_utf8 a byte past ASCII is '?', with TNUM too; a plain "%s"
+ * writes the vertices of vsnprintf's copy, also past the 319-byte cut and
+ * for NULL */
+static void text_checks(void)
+{
+    char big[400];
+    const char *volatile nul = NULL;
+    memset(big, 'w', sizeof big - 1);
+    big[sizeof big - 1] = 0;
+    begin_frame();
+    for (int f = 0; f < F_COUNT; f++) {
+        int w = text_w(f, "abc");
+        CHECK(text(500, 20, f, WHITE, "abc") == 500 + w);
+        CHECK(text_r(500, 20, f, WHITE, "abc") == 500 - w);
+        CHECK(text_c(500, 20, f, WHITE, "abc") == floorf(500 - w / 2 + 0.5f) + w);
+        CHECK(text_w(f, "\x80\x89\xff") == 3 * text_w(f, "?"));
+        CHECK(text_w(f | TNUM, "\x80\x85") == 2 * text_w(f | TNUM, "?") && text_w(f | TNUM, "0") != 0);
+        const char *s[] = {"Couch 0.3.0", big, "", nul};
+        for (int k = 0; k < 4; k++) {
+            cap_start();
+            float a = text_fit(10, 40, f, WHITE, 600, "%s", s[k]);
+            int n = cap_end();
+            memcpy(cap2, cap, n * sizeof *cap);
+            cap_start();
+            float b = text_fit(10, 40, f, WHITE, 600, "%s%s", s[k], "");
+            CHECK(cap_end() == n && a == b && !memcmp(cap, cap2, n * sizeof *cap));
+        }
+    }
+    ui_flip();
+}
+
+/* ---- run_job: a job's copy, the bar, the presses after it ----------------- */
+
+static u8 *job_src, job_dst[256];
+static int job_rc = 1;
+
+static void job(void)
+{
+    job_set_percent(150);                                   /* drawn as 100 % */
+    progress("kitcheck job");
+    job_rc = gfx_copy_to_main_job(job_src, job_dst, sizeof job_dst);
+}
+
+/* the job's copy runs in this thread's next gfx_wait; after the job no press
+ * and no armed gesture are left */
+static void jobs(void)
+{
+    gfx_tex t;
+    job_src = gfx_tex_new(&t, 64, 1, GFX_TEX_A8R8G8B8, 0);
+    CHECK(job_src != NULL);
+    if (!job_src) return;
+    for (unsigned i = 0; i < sizeof job_dst; i++) job_src[i] = (u8)(i * 5 + 3);
+    pressed = BTN_CROSS;
+    armed = BTN_SQUARE;
+    run_job("kitcheck job", job);
+    CHECK(job_rc == 0 && !memcmp(job_dst, job_src, sizeof job_dst));
+    CHECK(pressed == 0 && armed == 0);
+}
+
+/* A failed digits_init or icons_init stays failed. In a child process (its
+ * own copy of the RSX memory), with room for two of the three atlases but
+ * not the third, the first call fails partway; a second returns -1 at once
+ * and takes nothing (a retry would take the first two again). */
+#define PV_LOCAL 0x0F900000u                 /* the preview's RSX memory (gfx_soft.c), 249 MB */
+
+static int init_fails(int (*init)(void), u32 left)
+{
+    u32 off = vram_at();
+    gfx_vram(PV_LOCAL - (off + 128) - left, 128, NULL);         /* left bytes stay free */
+    u32 a = vram_at();
+    int r1 = init();
+    u32 b = vram_at();
+    int r2 = init();
+    u32 c = vram_at();
+    if (r1 != -1 || b - a <= 128 || r2 != -1 || c - b != 128) printf("FAIL init after a failure: %d, %u bytes, %d, %u bytes\n", r1, b - a - 128, r2, c - b - 128);
+    return r1 == -1 && b - a > 128 && r2 == -1 && c - b == 128;
+}
+
+/* A failed text_utf8 stays failed too, in a child before utf8() loads it
+ * (room for some of the five Latin atlases, not all, and for the first
+ * again: a retry would take it). */
+static void utf8_failure(void)
+{
+    fflush(stdout);
+    pid_t pid = fork();
+    if (pid == 0) {
+        int good = init_fails(text_utf8, 1200000) && text_w(F_BODY, "\xc3\xb3") == 2 * text_w(F_BODY, "?");   /* bytes: '?' twice */
+        fflush(stdout);
+        _exit(good ? 0 : 1);
+    }
+    int st = 0;
+    CHECK(pid > 0 && waitpid(pid, &st, 0) == pid && WIFEXITED(st) && WEXITSTATUS(st) == 0);
+}
+
+/* safe_set writes the area and safe_load reads it back; a file that is not
+ * a valid area reads as none (the default stays) */
+static void safe_area(void)
+{
+    CHECK(safe_valid(100, 60, 1820, 1020) && !safe_valid(100, 60, 1500, 1020) && !safe_valid(-1, 0, 1920, 1080));
+    safe_set(100, 60, 1820, 1020);
+    safe_l = safe_t = safe_r = safe_b = 0;
+    CHECK(safe_load() == 1 && safe_l == 100 && safe_t == 60 && safe_r == 1820 && safe_b == 1020 && SW == 1720 && SH == 960);
+    CHECK(fs_write_file(DIR "/safe_area.txt", "10 10 20 20\n", 12, 0) == 0 && safe_load() == 0 && safe_l == 100);
+    CHECK(fs_write_file(DIR "/safe_area.txt", "x", 1, 0) == 0 && safe_load() == 0);
+    safe_set(SAFE_DEF_L, SAFE_DEF_T, SAFE_DEF_R, SAFE_DEF_B);
+    CHECK(SW == SAFE_DEF_R - SAFE_DEF_L && SH == SAFE_DEF_B - SAFE_DEF_T);
+}
+
+static void init_failures(void)
+{
+    for (int k = 0; k < 2; k++) {
+        fflush(stdout);
+        pid_t pid = fork();
+        if (pid == 0) {                      /* digits: 295,680 and 515,968 bytes fit, 1,133,824 do not; icons: 39,168 and 154,752, not 559,872 */
+            int good = k == 0 ? init_fails(digits_init, 1500000) && digits_h(D_M) == 0 && digits_w(D_M, "1") == 0
+                              : init_fails(icons_init, 600000) && icon_size(IC_S_CARET_UP) == 0;
+            fflush(stdout);
+            _exit(good ? 0 : 1);
+        }
+        int st = 0;
+        CHECK(pid > 0 && waitpid(pid, &st, 0) == pid && WIFEXITED(st) && WEXITSTATUS(st) == 0);
+    }
+}
+
 static void digit_checks(void)
 {
     static const char *const sz[D_COUNT] = {"D_M", "D_L", "D_XL"};
     const char *all = "0123456789:,.-+%\xc2\xb0";
     CHECK(digits_w(D_L, "12") == 0 && digits_h(D_L) == 0);           /* before digits_init: nothing */
     u32 a = vram_at();
-    CHECK(digits_init() == 0 && digits_init() == 0);
+    CHECK(digits_init() == 0);
     u32 b = vram_at();
+    CHECK(digits_init() == 0 && vram_at() - b == 128);              /* again: nothing, no memory (the mark's 128 bytes) */
     printf("digits_init: %u bytes of RSX memory\n", b - a - 128);
     CHECK(digits_h(D_M) > 0 && digits_h(D_L) > digits_h(D_M) && digits_h(D_XL) > digits_h(D_L));
     CHECK(digits_w(-1, "1") == 0 && digits_w(D_COUNT, "1") == 0 && digits_h(D_COUNT) == 0);
@@ -319,8 +453,9 @@ static void icon_checks(void)
 {
     CHECK(icon_size(IC_S_CARET_UP) == 0);                       /* before icons_init: nothing */
     u32 a = vram_at();
-    CHECK(icons_init() == 0 && icons_init() == 0);
+    CHECK(icons_init() == 0);
     u32 b = vram_at();
+    CHECK(icons_init() == 0 && vram_at() - b == 128);               /* again: nothing, no memory */
     printf("icons_init: %u bytes of RSX memory, %d icons\n", b - a - 128, IC_COUNT);
     CHECK(icon_size(IC_S_CARET_UP) == 32 && icon_size(IC_S_UMBRELLA) == 32 && icon_size(IC_M_SUN_FILL) == 64);
     CHECK(icon_size(IC_M_CLOUD_LIGHTNING_LINE) == 64 && icon_size(IC_L_SUN_FILL) == 168 && icon_size(IC_L_SNOWFLAKE_LINE) == 168);
@@ -451,6 +586,73 @@ static void aa_checks(void)
     CHECK(cap_end() == 0);
 }
 
+/* The ink of the captured quads: each triangle's area times its mean alpha. */
+static float ink(void)
+{
+    double s = 0;
+    for (int i = 0; i + 3 < ncap; i += 4)
+        for (int t = 1; t <= 2; t++) {
+            const gfx_vtx *a = &cap[i], *b = &cap[i + t], *c = &cap[i + t + 1];
+            double ar = fabs((double)(b->x - a->x) * (c->y - a->y) - (double)(b->y - a->y) * (c->x - a->x)) / 2;
+            s += ar * ((a->rgba & 255) + (b->rgba & 255) + (c->rgba & 255)) / 3 / 255;
+        }
+    return (float)s;
+}
+
+/* The anti-aliased helpers at their edges: a repeated point (aa_strip,
+ * aa_poly) and a closed outline draw as the plain ones, aa_poly past 64
+ * points, and a segment's ink in proportion to its length, also under 1 px. */
+static void aa_edges(void)
+{
+    static gfx_vtx ref[256];
+    int nref;
+    float tr[6] = {400, 400, 440, 400, 420, 380};
+    float trs[3][8] = {{400, 400, 440, 400, 420, 380, 400, 400}, {400, 400, 440, 400, 440, 400, 420, 380}, {400, 400, 400, 400, 440, 400, 420, 380}};
+    cap_start();
+    aa_poly(tr, 3, WHITE);
+    nref = cap_end();
+    memcpy(ref, cap, nref * sizeof *cap);
+    for (int k = 0; k < 3; k++) {                                 /* closed, a repeat inside, a repeat first: the triangle's vertices */
+        cap_start();
+        aa_poly(trs[k], 4, WHITE);
+        CHECK(cap_end() == nref && !memcmp(cap, ref, nref * sizeof *cap));
+    }
+    float two[8] = {400, 400, 440, 400, 440, 400, 400, 400};      /* two points after the repeats: nothing */
+    cap_start();
+    aa_poly(two, 4, WHITE);
+    CHECK(cap_end() == 0);
+    static float ring100[200];                                    /* 100 points: 2 quads each, the feather 0.5 px past the points */
+    for (int i = 0; i < 100; i++) ring100[2 * i] = 600 + 50 * cosf(i * 6.2831853f / 100), ring100[2 * i + 1] = 300 + 50 * sinf(i * 6.2831853f / 100);
+    float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+    cap_start();
+    aa_poly(ring100, 100, 0x6cb8ffc0);
+    CHECK(cap_end() == 800 && count_rgba(0x6cb8ff00) == 200 && extent(&x0, &y0, &x1, &y1) && near(x1 - x0, 101, 0.01f));
+    float st[6] = {100, 100, 200, 100, 200, 200}, sts[14] = {100, 100, 100, 100, 200, 100, 200, 100, 200, 100, 200, 200, 200, 200};
+    cap_start();
+    aa_strip(st, 3, 3, WHITE);
+    nref = cap_end();
+    memcpy(ref, cap, nref * sizeof *cap);
+    cap_start();                                                  /* repeats first, inside and last: the plain strip's vertices */
+    aa_strip(sts, 7, 3, WHITE);
+    CHECK(cap_end() == nref && !memcmp(cap, ref, nref * sizeof *cap));
+    cap_start();
+    aa_strip(sts, 2, 3, WHITE);                                   /* no length at all: nothing */
+    CHECK(cap_end() == 0);
+    cap_start();                                                  /* 1 px: the reference ink */
+    aa_line(100, 100, 101, 100, 3, 0x6cb8ffc0);
+    CHECK(cap_end() == 36);
+    float i1 = ink();
+    static const float lens[] = {0.1f, 0.25f, 0.5f, 0.75f, 1.5f, 2, 10};
+    for (int k = 0; k < 7; k++) {
+        cap_start();
+        aa_line(100, 100, 100 + lens[k] * 0.6f, 100 + lens[k] * 0.8f, 3, 0x6cb8ffc0);
+        CHECK(cap_end() == 36 && near(ink(), lens[k] * i1, 0.006f * i1));
+    }
+    cap_start();                                                  /* half a pixel: the alpha times 2 len / (1 + len), 2 / 3 */
+    aa_line(100, 100, 100.5f, 100, 3, 0x6cb8ffc0);
+    CHECK(cap_end() == 36 && count_rgba(0x6cb8ff80) == 16);
+}
+
 static void fx_checks(void)
 {
     static const int areas[3][4] = {{SAFE_DEF_L, SAFE_DEF_T, SAFE_DEF_R, SAFE_DEF_B}, {160, 90, 1760, 990}, {0, 2, 1920, 1078}};
@@ -542,6 +744,21 @@ static void fx_checks(void)
     cap_start();
     strip(back, 3, 4, WHITE);
     CHECK(cap_end() == 6 && near(cap[2].x, 200, 2.001f) && fabsf(cap[2].y - 100) <= 4.001f);
+    gfx_vtx sr[6];                                                /* a repeated point: its rows are the point's, the miter stays */
+    cap_start();
+    strip(rt, 3, 4, WHITE);
+    CHECK(cap_end() == 6);
+    memcpy(sr, cap, sizeof sr);
+    float rp[10] = {100, 100, 100, 100, 200, 100, 200, 100, 200, 200};
+    cap_start();
+    strip(rp, 5, 4, WHITE);
+    CHECK(cap_end() == 10);
+    for (int k = 0; k < 2; k++)
+        CHECK(same(&cap[k], &sr[k]) && same(&cap[2 + k], &sr[k]) && same(&cap[4 + k], &sr[2 + k]) && same(&cap[6 + k], &sr[2 + k]) && same(&cap[8 + k], &sr[4 + k]));
+    float one[6] = {100, 100, 100, 100, 100, 100};
+    cap_start();
+    strip(one, 3, 4, WHITE);                                      /* no length at all: nothing */
+    CHECK(cap_end() == 0);
     static float lng[2 * 300];
     for (int i = 0; i < 300; i++) lng[2 * i] = 10 + i * 6, lng[2 * i + 1] = 500 + (i % 7) * 3;
     cap_start();
@@ -556,7 +773,24 @@ static void fx_checks(void)
     cap_start();
     area(st, 3, 160, 0x6cb8ff40, 0x6cb8ff00);
     CHECK(cap_end() == 6 && cap[0].y == 100 && cap[1].y == 160 && cap[4].x == 300 && cap[0].rgba == 0x6cb8ff40 && cap[1].rgba == 0x6cb8ff00);
+    /* area across its base: a pair of vertices at each crossing, the two triangles meet there */
+    float cr[6] = {50, 100, 100, 200, 150, 100};
+    cap_start();
+    area(cr, 3, 150, 0x6cb8ff40, 0x6cb8ff00);
+    CHECK(cap_end() == 10 && same(&cap[2], &cap[3]) && same(&cap[6], &cap[7]) && cap[2].x == 75 && cap[6].x == 125);
+    CHECK(cap[2].y == 150 && cap[6].y == 150 && cap[2].rgba == 0x6cb8ff00 && cap[4].x == 100 && cap[4].y == 200 && cap[4].rgba == 0x6cb8ff40);
+    CHECK(cap[0].x == 50 && cap[1].y == 150 && cap[8].x == 150 && cap[9].y == 150);
+    float on[6] = {50, 150, 100, 100, 150, 150};                  /* points on the base: no crossing */
+    cap_start();
+    area(on, 3, 150, WHITE, 0);
+    CHECK(cap_end() == 6);
+    static float zz[2 * 200];                                     /* every segment crosses: pieces of 64 points, 254 vertices */
+    for (int i = 0; i < 200; i++) zz[2 * i] = 10 + i * 6, zz[2 * i + 1] = i & 1 ? 200 : 100;
+    cap_start();
+    area(zz, 200, 150, WHITE, 0);
+    CHECK(cap_end() == 3 * 254 + 2 + 10 * 4 && same(&cap[252], &cap[254]) && same(&cap[253], &cap[255]) && same(&cap[506], &cap[508]));
     aa_checks();
+    aa_edges();
     ui_flip();
     /* tex_upload: whole words of each row, from a source pitch, nothing past them */
     static u32 src[7 * 36];
@@ -596,13 +830,19 @@ int main(void)
     block();
     copies();
 
-    /* pad_repeat: the press, then 350 ms, then every 30 ms; groups apart; a new press after a release */
+    /* pad_repeat: the press, then 350 ms, then every 30 ms; groups apart; a new press after a release.
+     * gesture: DOWN's press at frame 10 disarms an armed SQUARE in read_pad and arms DOWN; a second call
+     * in that frame does not fire; DOWN's next press, at frame 80, fires once, for DOWN's call only */
     pad_rep down = {0}, side = {0};
-    unsigned fired[128] = {0};
+    unsigned fired[128] = {0}, gest[128] = {0}, gest_other = 0;
     ui_stat st;
     ui_stats(&st, 1);
     for (int f = 1; f <= 100; f++) {                        /* f is the preview's frame: block() drew frame 0 */
+        if (f == 10) armed = BTN_SQUARE;
         read_pad();
+        if (f == 10) CHECK(armed == 0);
+        gest[f] = gesture(BTN_DOWN);
+        gest_other |= gesture(BTN_DOWN | BTN_UP) | gesture(BTN_UP);
         fired[f] = pad_repeat(&down, BTN_DOWN | BTN_UP);
         CHECK(!pad_repeat(&side, BTN_LEFT | BTN_RIGHT));
         begin_frame();
@@ -616,6 +856,10 @@ int main(void)
     for (int f = 1; f <= 100; f++)
         if (!!fired[f] != want[f] || (fired[f] && fired[f] != BTN_DOWN)) { printf("FAIL pad_repeat at frame %d: %x\n", f, fired[f]); ok = 0; }
     CHECK(ok);
+    ok = !gest_other;
+    for (int f = 1; f <= 100; f++)
+        if (gest[f] != (f == 80 ? BTN_DOWN : 0)) { printf("FAIL gesture at frame %d: %x\n", f, gest[f]); ok = 0; }
+    CHECK(ok);
 
     /* ui_stats on the preview's clock: 16,667 us a frame, all of it in gfx_end */
     ui_stats(&st, 1);
@@ -627,7 +871,7 @@ int main(void)
 
     /* ui_submit: a frame counts at its wait in the next begin_frame. The
      * preview's clock moves in pv_flip, at the submit, so the 16,667 us are
-     * busy and the wait is 0. The tenth frame waits for utf8's begin_frame. */
+     * busy and the wait is 0. The tenth frame waits for text_checks' begin_frame. */
     for (int f = 0; f < 10; f++) {
         begin_frame();
         footer("L1 previous  R1 next  L1/R1 page  CROSS play");
@@ -636,10 +880,15 @@ int main(void)
     ui_stats(&st, 1);
     CHECK(st.frames == 9 && st.period_us == 16667 && st.wait_us == 0 && st.busy_us == 16667);
     CHECK(st.wait_sum_us == 0 && st.busy_sum_us == 9ull * 16667 && st.slow == 0 && st.vertices > 0);
+    text_checks();                                          /* before utf8: the bytes past ASCII */
+    utf8_failure();
     utf8();                                                 /* the text stays UTF-8: the checks after it draw no text */
+    init_failures();                                        /* before digit_checks: the children need the atlases not loaded */
     digit_checks();
     icon_checks();
     fx_checks();
+    jobs();
+    safe_area();
 
     if (fails) {
         printf("kitcheck: %d checks failed\n", fails);

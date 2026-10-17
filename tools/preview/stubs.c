@@ -267,7 +267,21 @@ s32 sysLv2FsRead(s32 fd, void *b, u64 l, u64 *n) { ssize_t r = read(fd, b, l); *
 s32 sysLv2FsWrite(s32 fd, const void *b, u64 l, u64 *n) { ssize_t r = write(fd, b, l); *n = r > 0 ? (u64)r : 0; return r < 0 ? -1 : 0; }
 s32 sysLv2FsLSeek64(s32 fd, s64 off, s32 wh, u64 *pos) { off_t r = lseek(fd, off, wh); if (r < 0) return -1; *pos = (u64)r; return 0; }
 s32 sysLv2FsFsync(s32 fd) { (void)fd; return 0; }
-s32 sysLv2FsStat(const char *path, sysFSStat *st) { char p[1024]; struct stat s; (void)st; return stat(map(path, p, sizeof p), &s) ? (s32)0x80010006 : 0; }
+s32 sysLv2FsStat(const char *path, sysFSStat *st)
+{
+    char p[1024];
+    struct stat s;
+    if (stat(map(path, p, sizeof p), &s)) return (s32)0x80010006;
+    st->st_mode = (s32)s.st_mode;            /* the type and permission bits: LV2's octal values are POSIX's */
+    st->st_uid = (s32)s.st_uid;
+    st->st_gid = (s32)s.st_gid;
+    st->st_atime_ = (u64)s.st_atime;
+    st->st_mtime_ = (u64)s.st_mtime;
+    st->st_ctime_ = (u64)s.st_ctime;
+    st->st_size = (u64)s.st_size;
+    st->st_blksize = (u64)s.st_blksize;
+    return 0;
+}
 s32 sysLv2FsMkdir(const char *path, s32 mode)
 {
     char p[1024];

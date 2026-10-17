@@ -61,11 +61,15 @@ the memory layout, the source of each RSX word and the shader recipe):
 
 The journal loader streams the complete file with bounded memory. It stays
 append-only until explicitly cleared so old freezes and declined calls remain
-recorded. `journal_start` returns 0 for a blocked call or when its start record
-A failed read, write, sync or close latches `journal_io_failed()` until a
-reload or a clear: the app can say that its freezes may go unrecorded. The
-calls still run, as before: a folder that cannot be written must not turn
-into "it froze this console before" in every app.
+recorded. `journal_start` returns 0 only for a frozen or skipped call. A
+record that fails is written once more (after a short write it starts on a
+line of its own). A failed read, a record that fails twice, or a failed
+clear latches `journal_io_failed()` until a reload or a clear: the app can
+say that its freezes may go unrecorded. The calls still run, as before: a
+folder that cannot be written must not turn into "it froze this console
+before" in every app. One case stays: when the `start` record went in and
+the `done` record fails twice (a disk that the call filled), the next start
+reads the call as frozen.
 
 `<ps3gfx/fs.h>`, whole files through the `sysLv2Fs*` syscalls:
 - `fs_write_file`, `fs_read_file`, `fs_selftest(dir, &mkdir_rc, &open_rc, &write_rc)`
@@ -100,13 +104,14 @@ An app's preview twin runs a job at once with an fx_io that copies into its text
 `<ps3gfx/digits.h>`, the display digits (`digits.c` with `digits.bin`, linked only by an app that calls
 `digits_init`: 1,945,472 B of RSX memory, 479,584 B of data in the ELF):
 - `D_M`, `D_L`, `D_XL` (84, 112 and 168 px of Inter), `D_COUNT`
-- `digits_init`, `digits`, `digits_r`, `digits_w`, `digits_h`, `digits_half` (a flip card's half, from the middle
+- `digits_init` (a failed one stays failed: a second call returns -1 and takes no RSX memory), `digits`,
+  `digits_r`, `digits_w`, `digits_h`, `digits_half` (a flip card's half, from the middle
   line, with a y scale), `digits_mid` (that line). The glyphs: 0 to 9 tabular, `: , . - + %` and the degree sign
   (UTF-8 C2 B0 or the byte B0); `-` draws the minus sign.
 
 `<ps3gfx/icons.h>` and `<ps3gfx/icons_ids.h>`, the icons (`icons.c` with `icons.bin`, linked only by an app that
 calls `icons_init`: 753,792 B of RSX memory, 184,516 B of data in the ELF): Phosphor Icons 2.1.1 (MIT)
-- `icons_init`, `icon` (centred, on a whole pixel), `icon_rot` (turned and scaled about the centre, no snap, always
+- `icons_init` (a failed one stays failed, as `digits_init`), `icon` (centred, on a whole pixel), `icon_rot` (turned and scaled about the centre, no snap, always
   bilinear: an S or M icon that moves by fractions of a pixel too, through a second `gfx_tex` of its set's
   texels with no new RSX memory), `icon_size`
 - the ids `IC_S_*` (32 px bold: caret-up, caret-down, minus, drop, clock, wifi-high, wifi-slash,
@@ -123,8 +128,10 @@ calls `icons_init`: 753,792 B of RSX memory, 184,516 B of data in the ELF): Phos
 - `aa_line`, `aa_lines`, `aa_strip`, `aa_ring`, `aa_disc`, `aa_poly`, `aa_corners`: anti-aliased lines and
   shapes, untextured (the RSX draws with no multisampling): every edge fades from the colour's alpha to 0
   over 1 px, a w px line is a core of w - 1 px and a 1 px feather on each side, the quads touch and never
-  overlap (a translucent line covers no pixel twice), and they join one GFX_QUADS draw; `aa_corners` is a 1
-  px fringe outside the arcs of `round_rect`'s corners
+  overlap (a translucent line covers no pixel twice), and they join one GFX_QUADS draw; a repeated point
+  counts once (in `strip` too), a segment under 1 px keeps its length's ink, `aa_poly` takes any number of
+  points, and `area` splits at a crossing of its base; `aa_corners` is a 1 px fringe outside the arcs of
+  `round_rect`'s corners
 - `tex_pair`, `tex_pair_new`, `tex_pair_shown`, `tex_pair_wtex`, `tex_pair_written`, `tex_pair_swap`: two
   textures that take turns (the frame draws one while a writer, an SPU by DMA, fills the other)
 
@@ -132,9 +139,10 @@ Every name is PS3 Health's, except the additions of 2026-10-09 for Cell
 Bench: the `format` field of `gfx_tex` with A8R8G8B8 (an 8-bit picture
 needs no dither), `wrap_step` and `screen_origin`, and a journal table of 64
 names (was 32: Cell Bench uses 31). The journal keeps a static table of 64
-names: an app passes a name at each call, the table keeps its first 23
-characters (two names with the same first 23 share one state), and more
-than 64 names share the last slot. `format` is the last field of `gfx_tex`,
+names: an app passes a name at each call, and the file and the table keep it
+up to its first space and at most 23 characters (two names with the same cut
+form share one state; since 2026-10-17 a name with a space keeps its freeze,
+and the file holds the cut form), and more than 64 names share the last slot. `format` is the last field of `gfx_tex`,
 so an initializer without it gets A4R4G4B4, and an app built for the first
 library builds unchanged. The additions of 2026-10-10:
 - `gfx_block`, which replaces Cell Bench's padding quads and its 150 calls
@@ -188,6 +196,25 @@ the old functions of `gfx_rsx.o` keep their instructions (only the TOC
 offsets move), no RSX word changes until an app copies, and `gfx_wait`
 reads one more word per frame (a job's request, none).
 
+The fixes of 2026-10-17, from a review of the whole library: the journal
+(a name up to its first space, a record written once more after a failure,
+a torn record that keeps the next one, `ok=` 0 or 1), `gesture` (a press
+fires only for its own buttons and never in the read that armed it; any
+other press disarms in `read_pad`), `read_pad` (a pad that goes away
+releases its buttons), a byte past ASCII draws `?` before `text_utf8`, a
+failed `text_utf8`, `digits_init` or `icons_init` stays failed, a job copy
+that gives up frees its slot when the copy ends, `ui_shot` through
+`gfx_copy_to_main`, and the geometry of `fx.h` at repeated points, crossings
+and short segments. They change PS3 Health's, Cell Bench's and Couch's ELFs;
+none of the preview's snapshots changes, and the visible area screen's help
+line now reads "UP/DOWN taller or shorter". The speed changes keep every
+vertex's bits: ASCII text after `text_utf8` takes the byte paths, a plain
+`"%s"` skips `vsnprintf`, the fans and strips take no division per vertex,
+`digits` and `icon` round with float adds, not `floorf`, and the effects
+program's three-trip loops are unrolled by hand (`data/spu_fx.spu` changes).
+The next console round checks `ui_shot`'s bytes (the copy) and Couch's sky
+and aurora on the new program.
+
 ## The RSX copy
 
 `gfx_copy_to_main(src, dst, bytes)` copies RSX local memory into main
@@ -202,7 +229,7 @@ PSL1GHT's `rsxSetTransferData`). `src` is an address that `gfx_vram` or
 | `GFX_COPY_EFRAME` (-3) | `gfx_copy_to_main` inside a frame |
 | `GFX_COPY_EBUSY` (-4) | `gfx_copy_to_main_job`: another request waits |
 | `GFX_COPY_ENOFRAME` (-5) | `gfx_copy_to_main_job`: no frame ended in about 2 s to take the request |
-| `GFX_COPY_ETIME` (-6) | the RSX did not finish a round in about 2 s |
+| `GFX_COPY_ETIME` (-6) | the RSX did not finish a round in about 2 s; for `gfx_copy_to_main_job` also: the drawing thread did not end the copy in about 8 s more |
 
 How: the RSX copies at most 960 KB a round into the vertex area (the IO
 area from 64 KB to 1 MB, main memory that the RSX can already write and that
@@ -230,8 +257,9 @@ Where:
 
 Safety: after `GFX_COPY_ETIME` the RSX may still write the vertex area, and
 for a job the drawing thread may still write `dst`: keep `dst` allocated.
-Every later copy then returns `GFX_COPY_ETIME` at once (a job may get
-`GFX_COPY_EBUSY`). The copy writes to RSX memory never, and to main memory
+After a round that timed out, every later copy returns `GFX_COPY_ETIME` at
+once. A job that gave up leaves its request with the drawing thread: the next
+request gets `GFX_COPY_EBUSY` until that copy ends, then the slot is free. The copy writes to RSX memory never, and to main memory
 only the vertex area and `dst`. The PPU's reads of the result rest on two
 console facts that no host check can show: that the RSX writes the backend
 label only after the transfer, and that the `dcbf` passes leave no stale
@@ -466,7 +494,7 @@ else it puts a report with `status` `FX_ST_SERIAL` and writes nothing else.
 After the job it puts the report: `serial`, `done` 1, `ticks` (the
 decrementer ticks of the job), `count` (the jobs so far), `sum` (the word
 sum of the check row, or of every rain word sent), `sum2` (the glass's check
-row), `quads`. An exit flag in the block gives a last report (`done` 2) and
+row), `quads` (rain; 0 for sky and aurora). An exit flag in the block gives a last report (`done` 2) and
 the exit status `FX_EXIT_DONE | index`. The first 48 bytes of the report are
 the kit's. The mode is a field of each block: one thread may run a sky job,
 then an aurora job; the rain's particles stay in the local store from one
@@ -529,19 +557,20 @@ be `FX_KAT`, or the app keeps the SPUs off.
 function); `make -C spu/fx update` copies the program to `data/spu_fx.spu`.
 The flags are the kit's (no libm: sin and exp are polynomials).
 
-This build (spu-gcc 7.2.0, the five-octave clouds of 2026-10-14): text
-24,240 bytes, data 816 (newlib's), bss 116,240, `data/spu_fx.spu` 26,136
-bytes. The local store:
+This build (spu-gcc 7.2.0, the five-octave clouds of 2026-10-14, the
+channel and curtain loops unrolled by hand on 2026-10-17): text 24,952
+bytes, data 816 (newlib's), bss 116,240, `data/spu_fx.spu` 26,776 bytes.
+The local store:
 
 | Address | Size | What |
 |---|---|---|
-| 0x00000 | 25,344 B | the code, the constants, newlib's data |
-| 0x06300 | 74,752 B | one union of the jobs' buffers: the sky's (two rows, the horizontal passes, the glass band 3 x 45 x 240 x 16 bits), the aurora's (the curtains per column, two rows), the rain's two quad buffers |
-| 0x18700 | 24,704 B | the rain's particles and splashes (kept between jobs) |
-| 0x1e780 | 16,384 B | the noise table |
-| 0x22780 | 256 B | the control block, the report |
-| 0x22890 | | `_end` (CI: at most 0x28000); 104,304 B free under 0x3c000 |
-| 0x3c000 | 16 KB | the stack; the deepest call is about 3 KB (main 1,280 B, the sky job 1,664 B) |
+| 0x00000 | 25,984 B | the code, the constants, newlib's data |
+| 0x06580 | 74,752 B | one union of the jobs' buffers: the sky's (two rows, the horizontal passes, the glass band 3 x 45 x 240 x 16 bits), the aurora's (the curtains per column, two rows), the rain's two quad buffers |
+| 0x18980 | 24,704 B | the rain's particles and splashes (kept between jobs) |
+| 0x1ea00 | 16,384 B | the noise table |
+| 0x22a00 | 256 B | the control block, the report |
+| 0x22b10 | | `_end` (CI: at most 0x28000); 103,664 B free under 0x3c000 |
+| 0x3c000 | 16 KB | the stack; the deepest call is about 3 KB (main 1,264 B, the sky job 1,840 B) |
 
 The cost on the SPU is an estimate: the instructions of each inner loop
 (spu-objdump), even and odd pipes counted apart, one cycle per instruction
@@ -549,19 +578,25 @@ of the busier pipe (no stalls), at 3.2 GHz:
 
 | Job | Per pixel or quad | One SPU's share of a picture | Design |
 |---|---|---|---|
-| FX_SKY: the clouds | 84 cycles (72 with three octaves) | 54 rows: 2.18 M cycles | |
-| FX_SKY: the glass source | 80 cycles (72) | 45 rows of 240: 0.86 M | |
+| FX_SKY: the clouds | 82 cycles (rolled loops: 87.5; three octaves: 72) | 54 rows: 2.13 M cycles | |
+| FX_SKY: the glass source | 80 cycles (rolled: 89; three octaves: 72) | 45 rows of 240: 0.86 M | |
 | FX_SKY: the blur and the glass rows | | 0.67 M | |
-| FX_SKY, all | | 3.7 M = 1.16 ms (three octaves: 3.3 M, 1.04 ms) | 0.6 ms |
-| FX_AURORA | 41 cycles | 72 rows: 1.97 M = 0.62 ms (0.8 ms with stalls) | 1.2 to 1.4 ms |
+| FX_SKY, all | | 3.66 M = 1.14 ms (three octaves: 3.3 M, 1.04 ms) | 0.6 ms |
+| FX_AURORA | 37 cycles (rolled: 41) | 72 rows: 1.77 M = 0.55 ms (the pixel loop 1.70 M, the curtains' preparation 0.06 M) | 1.2 to 1.4 ms |
 | FX_RAIN | about 140 cycles a quad, 50 more for the sum | 1,540 quads: 0.3 M = 0.09 ms | 0.03 to 0.05 ms |
 
 The console measured the three-octave sky (Couch, 2026-10-14): 1.97 ms a
 picture on the slowest SPU, 1.9 times this estimate (the stalls). The same
 factor gives the five-octave sky about 2.2 ms: at Couch's 60 pictures a
 second about 13 % of each of five SPUs (three octaves: 12 %). Most of the
-sky's even-pipe work is the noise's arithmetic and the float constants that
-spu-gcc builds again in each loop. On the host (Apple M4, one thread, the
+sky's even-pipe work is the noise's arithmetic: six samples of about 42
+instructions, about 250 of the 329 of a cloud quad. spu-gcc builds the float
+constants once a row, in the row loops (47 `il`, `ila`, `ilhu` and `iohl` in
+the clouds' row loop), and none in the pixel loops. Until 2026-10-17 the
+three-trip loops (the colour channels, the glass mix, the curtains) stayed
+loops: spu-gcc 7.2 does not unroll them at -O2 and has no `#pragma GCC
+unroll`, so each one reloaded its constants and missed its exit branch once a
+quad. No console has run the unrolled program yet. On the host (Apple M4, one thread, the
 plain lanes): a sky picture 3.2 ms (three octaves: 2.9 ms), an aurora
 picture 2.0 ms, a rain job 0.007 ms.
 
@@ -593,16 +628,20 @@ against the installed copy.
   `sys/file.h` and `test/lv2fs_stub.c` (froze at the next load, a skip
   persists, clear, complete histories beyond 32 KB, a done after froze,
   write/sync/close/read failures latch `journal_io_failed`, a torn last line, the name past the table,
-  a name of 24 characters or more): `cc -std=c99 -Wall -Wextra -I tools/preview/stub -I source test/test_journal.c source/journal.c source/fs.c test/lv2fs_stub.c`.
+  a name of 24 characters or more, a name with a space, a name of 80 characters, ok values other than 0 and 1,
+  a record written again after one failure, a record cut twice and the next one on its own line, a torn tail
+  when the writes fail, a clear whose sync fails, a folder whose path does not fit): `cc -std=c99 -Wall -Wextra -I tools/preview/stub -I source test/test_journal.c source/journal.c source/fs.c test/lv2fs_stub.c`.
 - `test/test_fs.c`: the one-line files of `fs_line.c` in a temp folder
   (a missing file, CR LF, no line end, an empty file, the edges, a cut at n,
-  the 254-character limit, a write that replaces, a remove):
+  the 254-character limit, a write that replaces, a remove, a read error, and
+  `fs_selftest`'s rcs for a short write and a folder whose path does not fit):
   `cc -std=c99 -Wall -Wextra -I tools/preview/stub -I source test/test_fs.c source/fs_line.c source/fs.c test/lv2fs_stub.c`.
 - `test/test_gfx.c`: gfx's front end (`source/gfx/gfx.c`) on a back end that
   records the draws, with an area of 409 vertices (the batching, the bounds of
   `gfx_prim`, the drains, the blocks, the viewport, the frame, the submit and the wait, the copy's argument
   rules, `GFX_COPY_EFRAME`, the wait before a copy, and a job's request: taken back after 10,000 naps, run
-  in the next `gfx_wait` between frames, one at a time): `cc -std=c99 -Wall -Wextra -DGFX_VTX_BYTES=8192 -I tools/preview/stub -I source/gfx test/test_gfx.c source/gfx/gfx.c`.
+  in the next `gfx_wait` between frames, one at a time, and in a second thread a job that gives up after
+  50,000 naps while the copy runs, whose slot is free when the copy ends): `cc -std=c99 -Wall -Wextra -pthread -DGFX_VTX_BYTES=8192 -I tools/preview/stub -I source/gfx test/test_gfx.c source/gfx/gfx.c`.
 - `test/test_spu_kit.c`: the SPU kit's contract (the report's size, alignment
   and layout, the arg2 packing) and its local-store kernel over a buffer of
   the SPU's area size, 16 passes: a clean area gives no error, and injected
@@ -618,7 +657,9 @@ against the installed copy.
   rule under alpha 0, the dither, the blur (flat in, flat out; random rows equal to a plain reference of three
   box passes per axis; the raw weights sum to 343 and spread an impulse symmetrically), FX_AURORA's band
   equality and its brightness cap, FX_RAIN's count, bounds, slant against the wind, cap, determinism and snow,
-  the jobs' refusals, and that a driver waits for a buffer before it fills it again:
+  the jobs' refusals, fx_tou at cfltu's edges, a NaN or far sun, a NaN or huge snow time, `quads` 0 in a sky or
+  aurora report after a rain job, and that a driver waits for a buffer before it fills it again (the host fx_io
+  hashes each piece at the put and checks it at the wait):
   `cc -std=c99 -O2 -Wall -Wextra -ffp-contract=off -I source -I source/gfx -I tools/preview/stub test/test_spu_fx.c -lm`.
   `--golden` checks the pictures' hashes (the same on arm64 and x86-64 with clang 21; CI does not run it),
   `--out DIR` writes the reference pictures as PPM, `--bench` times the jobs on the host, `--quantiles`
@@ -639,10 +680,19 @@ against the installed copy.
   icon id's cell and its centre, `icon_rot` at no turn against `icon` and at a fractional centre (no snap), the UVs of `tex_sub`, `tex_round` and
   `glass_uv` at the default, the narrow and the TV area and after a slide of the canvas, the slices of `glow9`
   (each pixel of the halo once, the rect and the outside never), `quad_rot` at 0 against `tex_sub`, the
-  miters and the pieces of `strip`, `area`, the anti-aliased helpers (each one's quads, the ink's extent, the
-  feather's alpha, a miter, both windings of `aa_poly`, nothing for no width), `tex_upload` and `tex_pair`.
-  It prints the RSX memory of
-  `digits_init` and `icons_init`.
+  miters, the pieces and a repeated point of `strip`, `area` (and across its base, a vertex pair at each
+  crossing), the anti-aliased helpers (each one's quads, the ink's extent, the feather's alpha, a miter, both
+  windings of `aa_poly`, nothing for no width; a repeated point and a closed outline in `aa_strip` and
+  `aa_poly`, `aa_poly` past 64 points, a segment's ink in proportion to its length, also under 1 px),
+  `tex_upload` and `tex_pair`. It prints the RSX memory of `digits_init` and `icons_init`, checks that a
+  second call takes none, and in two child processes with room for two of the three atlases, that a failed
+  init stays failed.
+- kitcheck also checks `gesture` on the pad script's DOWN (a disarm in `read_pad`, no fire in the read that
+  armed it, one fire for its own buttons only), the returns of `text`, `text_r` and `text_c`, a byte past
+  ASCII as `?` before `text_utf8` (TNUM too), a plain `"%s"` against `vsnprintf`'s copy (also past the cut
+  and for NULL), a failed `text_utf8` that stays failed (in a child process), and at the end a `run_job`
+  whose job copies by `gfx_copy_to_main_job`, with no press and no armed gesture after it, and `safe_set` and
+  `safe_load` (an area read back, a file that is no valid area read as none).
 - The smoke app's pages (CI, R1): frosted glass over a picture with a halo, a curve and a turned quad; the
   display digits with a flip card at four phases; every icon. CI takes each snapshot twice and compares the
   bytes.
