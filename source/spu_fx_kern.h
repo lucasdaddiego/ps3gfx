@@ -28,6 +28,7 @@
 
 #if defined(__SPU__)
 #include <spu_intrinsics.h>
+#define FX_CALL __attribute__((noinline))   /* static FX_CALL: a call of its own on the SPU, inline elsewhere */
 typedef vec_float4 fxv;
 typedef vec_uint4 fxu;
 #define FXV(a) spu_splats((float)(a))
@@ -70,6 +71,17 @@ static inline fxu fxu_cat(fxu a, fxu b, int k)
         {12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27}};
     return spu_shuffle(a, b, pat[k - 1]);
 }
+/* lanes i, j, l, m of the eight lanes a, b (0 to 3 a's, 4 to 7 b's): one
+ * shuffle, whose pattern is a constant when the lanes are */
+static inline fxu fxu_pick(fxu a, fxu b, int i, int j, int l, int m)
+{
+    const vec_uchar16 p = {4 * i, 4 * i + 1, 4 * i + 2, 4 * i + 3, 4 * j, 4 * j + 1, 4 * j + 2, 4 * j + 3,
+                           4 * l, 4 * l + 1, 4 * l + 2, 4 * l + 3, 4 * m, 4 * m + 1, 4 * m + 2, 4 * m + 3};
+    return spu_shuffle(a, b, p);
+}
+/* the four lanes as 16 bytes at p (16-byte aligned: the SPU's quadword
+ * store) */
+static inline void fxu_store(void *p, fxu a) { *(fxu *)p = a; }
 /* eight 16-bit words at p (16-byte aligned) as two 4-lane words, and back
  * (each lane's low 16 bits) */
 static inline void fxu_ld16(const uint16_t *p, fxu *lo, fxu *hi)
@@ -88,6 +100,7 @@ static inline void fxu_st16(uint16_t *p, fxu lo, fxu hi)
 
 #else
 #include <string.h>
+#define FX_CALL inline
 typedef struct { float f[4]; } fxv;
 typedef struct { uint32_t u[4]; } fxu;
 #define FX_V(op) { fxv r; for (int k = 0; k < 4; k++) r.f[k] = (op); return r; }
@@ -127,6 +140,12 @@ static inline uint32_t fxu_lane(fxu a, int j) { return a.u[j]; }
 static inline float fxv_lane(fxv a, int j) { return a.f[j]; }
 static inline fxu fxu_gather(const uint32_t *t, fxu i) FX_U(t[i.u[k]])
 static inline fxu fxu_cat(fxu a, fxu b, int n) FX_U(k + n < 4 ? a.u[k + n] : b.u[k + n - 4])
+static inline fxu fxu_pick(fxu a, fxu b, int i, int j, int l, int m)
+{
+    const int n[4] = {i, j, l, m};
+    FX_U(n[k] < 4 ? a.u[n[k]] : b.u[n[k] - 4])
+}
+static inline void fxu_store(void *p, fxu a) { memcpy(p, &a, sizeof a); }
 static inline void fxu_ld16(const uint16_t *p, fxu *lo, fxu *hi)
 {
     for (int k = 0; k < 4; k++) {
@@ -445,16 +464,29 @@ static inline fxu fx_argb(fxu a, fxu r, fxu g, fxu b)
     return fxu_or(fxu_or(fxu_shl(a, 24), fxu_shl(r, 16)), fxu_or(fxu_shl(g, 8), b));
 }
 
-/* cloud row y (FX_SKY_W words of A8R8G8B8) into out; its word sum */
-static inline uint32_t fx_cloud_row(const fx_sky_k *k, const uint32_t *tab, uint32_t y, uint32_t *out)
+/* four cloud texels (A8R8G8B8) from their samples; t: the row's thresholds */
+static inline fxu fx_texel4(const fxv rgb[3], fxv a, fxu t)
 {
+    return fx_argb(fx_dither(fx_byte(a), t), fx_byte(rgb[0]), fx_byte(rgb[1]), fx_byte(rgb[2]));
+}
+
+/* Cloud row y (FX_SKY_W words of A8R8G8B8) into out; its word sum. The
+ * three row functions (this one, fx_glass_src and fx_cloud_glass_row) are
+ * calls of their own on the SPU, each with a copy of the numbers: inlined
+ * into fx_sky_job, spu-gcc 7.2 -O2 keeps fewer constants in registers and
+ * leaves one of the four fx_cloud4 as a call; through the pointer, a store
+ * into out may change the numbers, and the loop loads them again. Either
+ * way a step takes 458 cycles or more, here 439. */
+static FX_CALL uint32_t fx_cloud_row(const fx_sky_k *kp, const uint32_t *tab, uint32_t y, uint32_t *out)
+{
+    const fx_sky_k kl = *kp, *k = &kl;
     fxv X = fxv4(0.0f, 1.0f, 2.0f, 3.0f), Y = FXV((float)y);
     float fade = fx_sky_fade(y);
     fxu t = fx_bayer_row(y), sum = FXU(0);
     for (int x = 0; x < FX_SKY_W; x += 4) {
         fxv rgb[3], a;
         fx_cloud4(k, tab, X, Y, fade, rgb, &a);
-        fxu w = fx_argb(fx_dither(fx_byte(a), t), fx_byte(rgb[0]), fx_byte(rgb[1]), fx_byte(rgb[2]));
+        fxu w = fx_texel4(rgb, a, t);
         *(fxu *)(out + x) = w;
         sum = fxu_add(sum, w);
         X = fx_add(X, FXV(4.0f));
@@ -463,7 +495,13 @@ static inline uint32_t fx_cloud_row(const fx_sky_k *k, const uint32_t *tab, uint
 }
 
 /* The glass. A row is FX_GLASS_W pixels as 60 vectors per channel, with one
- * vector of padding at each end: [0] and [61]. */
+ * vector of padding at each end: [0] and [61]. Glass pixel (gx, gy) takes
+ * the clouds' sample at picture pixel (2 gx, 2 gy): a sky job's own glass
+ * rows from the samples of its even cloud rows (fx_cloud_glass_row), the
+ * margin rows from samples of their own (fx_glass_src), the same numbers.
+ * (Until 2026-10-17 every glass row sampled the clouds again, at the 2 x 2
+ * pixels' centre, 2 gx + 0.5, 2 gy + 0.5: a band's clouds and glass source
+ * 4.0 M cycles, now 3.1 M.) */
 #define FX_GV (FX_GLASS_W / 4)
 #define FX_GROW (FX_GV + 2)
 
@@ -478,24 +516,64 @@ static inline void fx_sky_at(const fx_sky_k *k, uint32_t gy, float c[3])
     for (int i = 0; i < 3; i++) c[i] = k->sky[s][i] + (k->sky[s + 1][i] - k->sky[s][i]) * t;
 }
 
-/* The glass source of row gy: the sky and the clouds composited, sampled
- * at the centre of each glass pixel (picture x = 2 gx + 0.5), each channel
- * an integer 0 to 255, into h[c][1..60]. */
-static inline void fx_glass_src(const fx_sky_k *k, const uint32_t *tab, uint32_t gy, fxu h[3][FX_GROW])
+/* vector i of a glass source row from four cloud samples (rgb and the
+ * alpha as fx_cloud4 gives them, before any byte or dither step): the sky s
+ * and the clouds composited, each channel an integer 0 to 255 */
+static inline void fx_glass4(const float s[3], const fxv rgb[3], fxv a, fxu h[3][FX_GROW], int i)
 {
+    fxv t = fx_mul(a, FXV(1.0f / 255.0f));
+    h[0][i] = fx_byte(fx_mix(FXV(s[0]), rgb[0], t));                     /* by hand, as in fx_cloud4 */
+    h[1][i] = fx_byte(fx_mix(FXV(s[1]), rgb[1], t));
+    h[2][i] = fx_byte(fx_mix(FXV(s[2]), rgb[2], t));
+}
+
+/* the even lanes: lanes 0 and 2 of a, then of b */
+static inline fxv fx_even(fxv a, fxv b) { return fx_float(fxu_pick(fx_bits(a), fx_bits(b), 0, 2, 4, 6)); }
+
+/* The glass source of row gy from samples of its own (a margin row), into
+ * h[c][1..60]: picture x = 2 gx in row 2 gy, as fx_cloud_glass_row. A call
+ * of its own (fx_cloud_row). */
+static FX_CALL void fx_glass_src(const fx_sky_k *kp, const uint32_t *tab, uint32_t gy, fxu h[3][FX_GROW])
+{
+    const fx_sky_k kl = *kp, *k = &kl;
     float s[3];
     fx_sky_at(k, gy, s);
-    float fade = fx_sky_fade(2 * gy + 1);
-    fxv X = fxv4(0.5f, 2.5f, 4.5f, 6.5f), Y = FXV(2.0f * (float)gy + 0.5f);
+    float fade = fx_sky_fade(2 * gy);
+    fxv X = fxv4(0.0f, 2.0f, 4.0f, 6.0f), Y = FXV((float)(2 * gy));
     for (int i = 1; i <= FX_GV; i++) {
         fxv rgb[3], a;
         fx_cloud4(k, tab, X, Y, fade, rgb, &a);
-        fxv t = fx_mul(a, FXV(1.0f / 255.0f));
-        h[0][i] = fx_byte(fx_mix(FXV(s[0]), rgb[0], t));                 /* by hand, as in fx_cloud4 */
-        h[1][i] = fx_byte(fx_mix(FXV(s[1]), rgb[1], t));
-        h[2][i] = fx_byte(fx_mix(FXV(s[2]), rgb[2], t));
+        fx_glass4(s, rgb, a, h, i);
         X = fx_add(X, FXV(8.0f));
     }
+}
+
+/* Even cloud row y as fx_cloud_row (into out; its word sum), and from its
+ * even samples the glass source of glass row y / 2 into h[c][1..60]: eight
+ * pixels a step, lanes 0 and 2 of each four (725 cycles a step, where two
+ * steps of fx_cloud_row take 878). A call of its own (fx_cloud_row). */
+static FX_CALL uint32_t fx_cloud_glass_row(const fx_sky_k *kp, const uint32_t *tab, uint32_t y, uint32_t *out,
+                                           fxu h[3][FX_GROW])
+{
+    const fx_sky_k kl = *kp, *k = &kl;
+    float s[3];
+    fx_sky_at(k, y / 2, s);
+    fxv X = fxv4(0.0f, 1.0f, 2.0f, 3.0f), Y = FXV((float)y);
+    float fade = fx_sky_fade(y);
+    fxu t = fx_bayer_row(y), sum = FXU(0);
+    for (int i = 1; i <= FX_GV; i++) {
+        fxv c0[3], a0, c1[3], a1;
+        fx_cloud4(k, tab, X, Y, fade, c0, &a0);
+        fx_cloud4(k, tab, fx_add(X, FXV(4.0f)), Y, fade, c1, &a1);
+        fxu w0 = fx_texel4(c0, a0, t), w1 = fx_texel4(c1, a1, t);
+        *(fxu *)(out + 8 * i - 8) = w0;
+        *(fxu *)(out + 8 * i - 4) = w1;
+        sum = fxu_add(sum, fxu_add(w0, w1));
+        const fxv rgb[3] = {fx_even(c0[0], c1[0]), fx_even(c0[1], c1[1]), fx_even(c0[2], c1[2])};
+        fx_glass4(s, rgb, fx_even(a0, a1), h, i);
+        X = fx_add(X, FXV(8.0f));
+    }
+    return fxu_lane(sum, 0) + fxu_lane(sum, 1) + fxu_lane(sum, 2) + fxu_lane(sum, 3);
 }
 
 /* One horizontal box pass of radius 3, raw sums (no division), from a to b:
@@ -592,8 +670,9 @@ typedef struct {
 } __attribute__((aligned(128))) fx_sky_ws;
 
 /* A sky job: the cloud rows [y0, y1) and the glass rows [y0 / 2, y1 / 2)
- * from the glass source of those rows and FX_GLASS_MARGIN rows on each
- * side. 0, or FX_EXIT_CTL with nothing written. */
+ * from the glass source of those rows (their even cloud rows' samples) and
+ * of FX_GLASS_MARGIN rows on each side (samples of their own). 0, or
+ * FX_EXIT_CTL with nothing written. */
 static inline uint32_t fx_sky_job(const fx_ctl *c, const uint32_t *tab, fx_sky_ws *ws, uint16_t *band, uint32_t cap,
                                   fx_io *io, fx_rec *rec)
 {
@@ -611,7 +690,12 @@ static inline uint32_t fx_sky_job(const fx_ctl *c, const uint32_t *tab, fx_sky_w
     for (uint32_t y = y0; y < y1; y++, n++) {
         uint32_t b = n & 1;
         if (n >= 2) io->wait(io, b);
-        uint32_t s = fx_cloud_row(&k, tab, y, ws->rows[b]);
+        uint32_t s;
+        if (y & 1) s = fx_cloud_row(&k, tab, y, ws->rows[b]);
+        else {
+            s = fx_cloud_glass_row(&k, tab, y, ws->rows[b], ws->h[0]);
+            fx_glass_hrow(ws->h, band, cap, y / 2 - r0);
+        }
         if (y == c->check_row) {
             rec->check_row = y;
             rec->sum = s;
@@ -619,6 +703,7 @@ static inline uint32_t fx_sky_job(const fx_ctl *c, const uint32_t *tab, fx_sky_w
         io->put(io, 0, y * FX_SKY_PITCH, ws->rows[b], FX_SKY_PITCH, b);
     }
     for (uint32_t gy = r0; gy < r1; gy++) {
+        if (gy >= g0 && gy < g1) continue;   /* the band's own rows: from their cloud rows, above */
         fx_glass_src(&k, tab, gy, ws->h[0]);
         fx_glass_hrow(ws->h, band, cap, gy - r0);
     }
@@ -836,16 +921,25 @@ static inline uint32_t fx_vsum(const fx_vtx *v, uint32_t n)
     return s;
 }
 
-static inline fx_vtx *fx_quad(fx_vtx *q, const float *x, const float *y, const uint32_t *rgba, const float *u,
-                              const float *v)
+/* A quad at q from its four vertices (lane j: vertex j): the 80 bytes as
+ * five quadwords built in registers, five quadword stores (a quad starts
+ * on a 16-byte boundary: a chunk is 128-byte aligned, a quad 80 bytes).
+ * Nine shuffles, eleven when u or v changes from quad to quad. (Until
+ * 2026-10-17 twenty scalar stores, each a load, a shuffle and a store of
+ * the quadword the store before wrote: a drop's quad about 280 cycles on
+ * the SPU, now 44.) */
+static inline fx_vtx *fx_quad(fx_vtx *q, fxv x, fxv y, fxu rgba, fxv u, fxv v)
 {
-    for (int j = 0; j < 4; j++) {
-        q[j].x = x[j];
-        q[j].y = y[j];
-        q[j].rgba = rgba[j];
-        q[j].u = u[j];
-        q[j].v = v[j];
-    }
+    fxu X = fx_bits(x), Y = fx_bits(y), U = fx_bits(u), V = fx_bits(v);
+    fxu xy0 = fxu_pick(X, Y, 0, 4, 1, 5), xy1 = fxu_pick(X, Y, 2, 6, 3, 7);       /* x0 y0 x1 y1, x2 y2 x3 y3 */
+    fxu uv0 = fxu_pick(U, V, 0, 4, 1, 5), uv1 = fxu_pick(U, V, 2, 6, 3, 7);       /* u0 v0 u1 v1, u2 v2 u3 v3 */
+    fxu c0 = fxu_pick(rgba, uv0, 0, 4, 5, 1), c1 = fxu_pick(xy1, rgba, 2, 3, 6, 7); /* c0 u0 v0 c1, x3 y3 c2 c3 */
+    uint8_t *p = (uint8_t *)q;
+    fxu_store(p, fxu_pick(xy0, c0, 0, 1, 4, 5));                                  /* x0 y0 c0 u0 */
+    fxu_store(p + 16, fxu_pick(xy0, c0, 6, 2, 3, 7));                             /* v0 x1 y1 c1 */
+    fxu_store(p + 32, fxu_pick(uv0, xy1, 2, 3, 4, 5));                            /* u1 v1 x2 y2 */
+    fxu_store(p + 48, fxu_pick(c1, uv1, 2, 4, 5, 0));                             /* c2 u2 v2 x3 */
+    fxu_store(p + 64, fxu_pick(c1, uv1, 1, 3, 6, 7));                             /* y3 c3 u3 v3 */
     return q + 4;
 }
 
@@ -881,11 +975,10 @@ static inline fx_vtx *fx_drop_step(fx_rain_state *st, const fx_rain_k *k, uint32
     }
     float w = hw[i % 3];
     uint32_t a = (uint32_t)(fx_clampf(p->k * k->alpha, 0.0f, 1.0f) * 255.0f + 0.5f);
-    const float x[4] = {k->ox + tx - w, k->ox + tx + w, k->ox + p->x + w, k->ox + p->x - w};
-    const float y[4] = {k->oy + ty, k->oy + ty, k->oy + p->y, k->oy + p->y};
-    const uint32_t c[4] = {k->rgb << 8, k->rgb << 8, k->rgb << 8 | a, k->rgb << 8 | a};
-    const float z[4] = {0, 0, 0, 0};
-    return fx_quad(q, x, y, c, z, z);
+    fxv x = fxv4(k->ox + tx - w, k->ox + tx + w, k->ox + p->x + w, k->ox + p->x - w);
+    fxv y = fxv4(k->oy + ty, k->oy + ty, k->oy + p->y, k->oy + p->y);
+    fxu c = fxu4(k->rgb << 8, k->rgb << 8, k->rgb << 8 | a, k->rgb << 8 | a);
+    return fx_quad(q, x, y, c, FXV(0.0f), FXV(0.0f));
 }
 
 /* Flake i one step, then its quad: a square of 4, 6 or 9 px by layer for
@@ -901,10 +994,8 @@ static inline fx_vtx *fx_flake_step(fx_rain_state *st, const fx_rain_k *k, uint3
     if (p->y - h > FX_SCREEN_H) fx_spawn(st, i, k->fall, 0);
     float cx = k->ox + p->x + 20.0f * fx_sin2pi(k->sway + p->k), cy = k->oy + p->y;
     uint32_t a = (uint32_t)(fx_clampf(al[i % 3] * k->alpha, 0.0f, 1.0f) * 255.0f + 0.5f);
-    const float x[4] = {cx - h, cx + h, cx + h, cx - h}, y[4] = {cy - h, cy - h, cy + h, cy + h};
-    const uint32_t c[4] = {k->rgb << 8 | a, k->rgb << 8 | a, k->rgb << 8 | a, k->rgb << 8 | a};
-    const float u[4] = {0, 1, 1, 0}, v[4] = {0, 0, 1, 1};
-    return fx_quad(q, x, y, c, u, v);
+    fxv x = fxv4(cx - h, cx + h, cx + h, cx - h), y = fxv4(cy - h, cy - h, cy + h, cy + h);
+    return fx_quad(q, x, y, FXU(k->rgb << 8 | a), fxv4(0, 1, 1, 0), fxv4(0, 0, 1, 1));
 }
 
 /* splash i: a flat arc that widens (12 to 22 px) and fades over 6 frames;
@@ -912,23 +1003,20 @@ static inline fx_vtx *fx_flake_step(fx_rain_state *st, const fx_rain_k *k, uint3
 static inline fx_vtx *fx_splash_quad(const fx_rain_state *st, const fx_rain_k *k, uint32_t i, fx_vtx *q)
 {
     const fx_splash *s = &st->s[i];
-    const float z[4] = {0, 0, 0, 0};
-    if (!s->live) {
-        const float x[4] = {k->ox, k->ox, k->ox, k->ox}, y[4] = {k->oy, k->oy, k->oy, k->oy};
-        const uint32_t c[4] = {0, 0, 0, 0};
-        return fx_quad(q, x, y, c, z, z);
-    }
+    if (!s->live) return fx_quad(q, FXV(k->ox), FXV(k->oy), FXU(0), FXV(0.0f), FXV(0.0f));
     float w = 6.0f + 2.0f * (float)s->age, cx = k->ox + s->x, cy = k->oy + s->y;
     uint32_t a = (uint32_t)(fx_clampf(0x60 / 255.0f * (1.0f - (float)s->age / 6.0f) * k->alpha, 0.0f, 1.0f) * 255.0f + 0.5f);
-    const float x[4] = {cx - w, cx + w, cx + w - 2.0f, cx - w + 2.0f}, y[4] = {cy, cy, cy - 2.0f, cy - 2.0f};
-    const uint32_t c[4] = {k->rgb << 8 | a, k->rgb << 8 | a, k->rgb << 8, k->rgb << 8};
-    return fx_quad(q, x, y, c, z, z);
+    fxv x = fxv4(cx - w, cx + w, cx + w - 2.0f, cx - w + 2.0f), y = fxv4(cy, cy, cy - 2.0f, cy - 2.0f);
+    fxu c = fxu4(k->rgb << 8 | a, k->rgb << 8 | a, k->rgb << 8, k->rgb << 8);
+    return fx_quad(q, x, y, c, FXV(0.0f), FXV(0.0f));
 }
 
 /* A rain job: move every particle by dt, then the quads (the drops, then
  * the FX_SPLASHES splashes; or the flakes) in chunks of FX_RAIN_CHUNK
- * through the two buffers q. The particles stay in st. 0, or FX_EXIT_CTL
- * with nothing written. */
+ * through the two buffers q. The particles stay in st. The word sum of the
+ * vertices only when the block asks (p.rain.check): it is a pass over
+ * every word (about 23 cycles a vertex, 0.14 M of a 1,540-quad job), and
+ * the app checks one job in many. 0, or FX_EXIT_CTL with nothing written. */
 static inline uint32_t fx_rain_job(const fx_ctl *c, fx_rain_state *st, fx_vtx (*q)[FX_RAIN_CHUNK * 4], fx_io *io,
                                    fx_rec *rec)
 {
@@ -968,7 +1056,7 @@ static inline uint32_t fx_rain_job(const fx_ctl *c, fx_rain_state *st, fx_vtx (*
             if (j < count) v = kind == FX_FLAKES ? fx_flake_step(st, &k, j, v) : fx_drop_step(st, &k, j, v);
             else v = fx_splash_quad(st, &k, j - count, v);
         }
-        sum += fx_vsum(q[b], 4 * m);
+        if (c->p.rain.check) sum += fx_vsum(q[b], 4 * m);
         io->put(io, 0, done * 80, q[b], m * 80, b);
         done += m;
     }
@@ -993,7 +1081,7 @@ static inline uint32_t fx_kat(void)
     uint32_t h = 0x811c9dc5u;
     for (uint32_t i = 0; i < 64; i++) t[i] = fx_hash(i);
     fxu a = fxu4(3, 17, 40, 63), b = fxu4(0x12345678u, 0x9abcdef0u, 0xffffffffu, 7);
-    fxu r[12];
+    fxu r[13];
     r[0] = fxu_gather(t, a);
     r[1] = fxu_cat(a, b, 1);
     r[2] = fxu_cat(a, b, 2);
@@ -1006,7 +1094,8 @@ static inline uint32_t fx_kat(void)
     r[9] = fx_dither(fxu4(0x2f, 0x0f, 0x30, 0x01), fx_bayer_row(1));
     r[10] = fxu_shr(fxu_shl(b, 7), 9);
     r[11] = fx_bits(fx_exp2n(fxv4(0.0f, 1.0f, 3.0f, 30.0f)));   /* whole e: the fraction is 0, the result exact */
-    for (int i = 0; i < 12; i++)
+    r[12] = fxu_pick(a, b, 6, 1, 4, 3);                           /* fx_quad's shuffles */
+    for (int i = 0; i < 13; i++)
         for (int j = 0; j < 4; j++) {
             uint32_t w = fxu_lane(r[i], j);
             for (int k = 0; k < 4; k++) h = (h ^ ((w >> (8 * k)) & 255)) * 0x01000193u;

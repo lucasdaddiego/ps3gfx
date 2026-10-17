@@ -1,15 +1,17 @@
 /* Host test of the effects program's contract and kernels (source/spu_fx.h,
- * source/spu_fx_kern.h): the sizes and the layout; the known-answer test;
- * fx_tou at cfltu's edges; FX_SKY's band equality (each band job alone
- * gives its rows of the full picture, the glass rows with their margin
- * too), its determinism, the coverage ends, the RGB rule under alpha 0, the
- * dither below 0x30 and a NaN or far sun; the blur (flat in, flat out; the
- * weights of three box passes sum to 343 per axis and spread an impulse
- * symmetrically); FX_AURORA's band equality and its brightness cap;
- * FX_RAIN's count, bounds, slant against the wind, cap, determinism, snow
- * and a NaN or huge time; quads 0 in a sky or aurora report after a rain
- * job; the jobs' refusals; and that every driver waits for a buffer before
- * it fills it again. The drivers run with a host fx_io that copies each
+ * source/spu_fx_kern.h): the sizes and the layout; fx_quad's vertex order;
+ * the known-answer test; fx_tou at cfltu's edges; FX_SKY's band equality
+ * (each band job alone gives its rows of the full picture, the glass rows
+ * with their margin too; a glass row from its cloud row's samples is the
+ * margin rows' rule), its determinism, the coverage ends, the RGB rule
+ * under alpha 0, the dither below 0x30 and a NaN or far sun; the blur
+ * (flat in, flat out; the weights of three box passes sum to 343 per axis
+ * and spread an impulse symmetrically); FX_AURORA's band equality and its
+ * brightness cap; FX_RAIN's count, bounds, slant against the wind, cap,
+ * determinism, the sum only when the block asks, snow and a NaN or huge
+ * time; quads 0 in a sky or aurora report after a rain job; the jobs'
+ * refusals; and that every driver waits for a buffer before it fills it
+ * again. The drivers run with a host fx_io that copies each
  * piece where the SPU's DMA would put it and checks at the wait that the
  * piece did not change.
  *
@@ -199,6 +201,14 @@ static void test_contract(void)
     /* fx_vtx is gfx_vtx */
     CHECK(sizeof(fx_vtx) == sizeof(gfx_vtx) && offsetof(fx_vtx, rgba) == offsetof(gfx_vtx, rgba) &&
           offsetof(fx_vtx, u) == offsetof(gfx_vtx, u) && offsetof(fx_vtx, v) == offsetof(gfx_vtx, v));
+    /* fx_quad: lane j of each input is vertex j's field (the SPU's five quadwords, the same shuffles here) */
+    fx_vtx qv[5] __attribute__((aligned(16)));
+    memset(qv, 0xa5, sizeof qv);
+    CHECK(fx_quad(qv, fxv4(1, 2, 3, 4), fxv4(5, 6, 7, 8), fxu4(9, 10, 11, 12), fxv4(13, 14, 15, 16), fxv4(17, 18, 19, 20)) ==
+          qv + 4);
+    for (int j = 0; j < 4; j++)
+        CHECK(qv[j].x == 1 + j && qv[j].y == 5 + j && qv[j].rgba == 9u + j && qv[j].u == 13 + j && qv[j].v == 17 + j);
+    CHECK(qv[4].rgba == 0xa5a5a5a5u);        /* nothing past the quad */
     uint32_t y0, y1, prev = 0;
     for (uint32_t i = 0; i < 5; i++) {
         fx_band(i, 5, FX_SKY_H, &y0, &y1);
@@ -252,6 +262,24 @@ static void test_sky(void)
             }
             CHECK(memcmp(pic, pic2, sizeof pic) == 0);
             CHECK(memcmp(glass, glass2, sizeof glass) == 0);
+        }
+        /* one rule for the glass source: a band's own row (from its even cloud row's samples) is the margin
+           row's (samples of its own), and that even cloud row is fx_cloud_row's */
+        {
+            static fxu g1[3][FX_GROW], g2[3][FX_GROW];
+            static uint32_t row1[FX_SKY_W], row2[FX_SKY_W];
+            static const uint32_t gys[] = {0, 1, 26, 27, 50, 67, 101, 134};
+            fx_sky_k k;
+            fx_sky_prep(&c, &k);
+            for (unsigned i = 0; i < sizeof gys / sizeof gys[0]; i++) {
+                memset(g1, 0x5a, sizeof g1);
+                memset(g2, 0xa5, sizeof g2);
+                uint32_t s1 = fx_cloud_glass_row(&k, tab, 2 * gys[i], row1, g1);
+                uint32_t s2 = fx_cloud_row(&k, tab, 2 * gys[i], row2);
+                fx_glass_src(&k, tab, gys[i], g2);
+                CHECK(s1 == s2 && memcmp(row1, row2, sizeof row1) == 0);
+                for (int ch = 0; ch < 3; ch++) CHECK(memcmp(&g1[ch][1], &g2[ch][1], FX_GV * sizeof(fxu)) == 0);
+            }
         }
         /* the RGB rule: a texel with alpha 0 has the cloud's colour, never black; the dither: no alpha in 1 to 15,
            every alpha under 0x30 a multiple of 0x10 */
@@ -496,8 +524,6 @@ static double luma_mean(const uint32_t *p, int n, double *peak)
     return s / n / 255;
 }
 
-static double aurora_max_mean;
-
 static void test_aurora(void)
 {
     fx_ctl c;
@@ -532,7 +558,6 @@ static void test_aurora(void)
             worst = m > worst ? m : worst;
             peak = p > peak ? p : peak;
         }
-    aurora_max_mean = worst;
     printf("aurora: mean brightness at most %.1f %% (peak pixel %.0f %%) over 36 pictures at gain 1\n", worst * 100,
            peak * 100);
     CHECK(worst <= 0.20);
@@ -566,6 +591,7 @@ static void rain_ctl(fx_ctl *c, uint32_t kind, uint32_t count)
     c->p.rain.ox = -67.0f;                   /* the default area: the screen's top left at canvas -67, -38 */
     c->p.rain.oy = -38.0f;
     c->p.rain.alpha = 1.0f;
+    c->p.rain.check = 1;                     /* the sum in every report (an app asks in one job of many) */
 }
 
 static uint32_t rain_run(const fx_ctl *c, fx_rain_state *st, fx_vtx *v, fx_rec *rec, host_io *h)
@@ -631,6 +657,18 @@ static void test_rain(void)
         rain_run(&c, &rst2, vtx2, &r, &h);
         CHECK(s1 == r.sum && memcmp(vtx, vtx2, 1140 * 80) == 0);
     }
+    /* check 0: sum 0, the same quads and the same particles after */
+    c.p.rain.check = 0;
+    for (int f = 0; f < 3; f++) {
+        rain_run(&c, &rst, vtx, &r, &h);
+        uint32_t s1 = r.sum;
+        c.p.rain.check = 1;
+        rain_run(&c, &rst2, vtx2, &r, &h);
+        c.p.rain.check = 0;
+        CHECK(s1 == 0 && r.sum == fx_vsum(vtx2, 1140 * 4) && r.sum != 0 && memcmp(vtx, vtx2, 1140 * 80) == 0);
+        CHECK(memcmp(&rst, &rst2, sizeof rst) == 0);
+    }
+    c.p.rain.check = 1;
     /* the degrade step: 750 drops, 790 quads; back to 1500 */
     c.p.rain.count = 750;
     CHECK(rain_run(&c, &rst, vtx, &r, &h) == 0 && r.quads == 790 && h.bytes == 790 * 80);
@@ -812,9 +850,10 @@ static void write_refs(const char *dir)
 static void golden(void)
 {
     /* clang 21 on arm64 (-O2, -O0) and on x86-64 (Rosetta): the same bits (2026-10-13; the sky's six
-     * again on 2026-10-14, the five-octave clouds) */
-    static const uint32_t want[] = {0xd79e27c1, 0x571dcac9, 0x871960e1, 0x657eb161, 0xf822c06e,
-                                    0x7ff07c6a, 0xf317c787, 0x91773a61, 0x53902be5, 0x5c6026a1};
+     * again on 2026-10-14, the five-octave clouds; the three glass on 2026-10-17, the samples at 2 gx, 2 gy:
+     * arm64 -O2 and -O0 only, Rosetta did not run) */
+    static const uint32_t want[] = {0xd79e27c1, 0xdb85a36a, 0x871960e1, 0x3b7e4f0a, 0xf822c06e,
+                                    0x400faa04, 0xf317c787, 0x91773a61, 0x53902be5, 0x5c6026a1};
     uint32_t got[10];
     int n = 0;
     fx_ctl c;
@@ -875,16 +914,20 @@ static void bench(void)
             fx_sky_job(&cb, tab, &sws, band, FX_GLASS_BAND_MAX, &h.io, &r);
         }
     double sky = (now() - t0) / reps;
-    /* the parts of one band: the clouds, the glass source, the blur */
+    /* the parts of one band: the clouds (with the glass source of the band's 27 rows), the margins' glass
+       source (18 rows), the blur */
     fx_sky_k k;
     fx_sky_prep(&c, &k);
     t0 = now();
     for (int i = 0; i < reps * 5; i++)
-        for (uint32_t y = 0; y < 54; y++) fx_cloud_row(&k, tab, y, sws.rows[0]);
+        for (uint32_t y = 0; y < 54; y++) {
+            if (y & 1) fx_cloud_row(&k, tab, y, sws.rows[0]);
+            else fx_cloud_glass_row(&k, tab, y, sws.rows[0], sws.h[0]);
+        }
     double cl = (now() - t0) / (reps * 5);
     t0 = now();
     for (int i = 0; i < reps * 5; i++)
-        for (uint32_t gy = 0; gy < 45; gy++) fx_glass_src(&k, tab, gy, sws.h[0]);
+        for (uint32_t gy = 0; gy < 18; gy++) fx_glass_src(&k, tab, gy, sws.h[0]);
     double src = (now() - t0) / (reps * 5);
     t0 = now();
     for (int i = 0; i < reps * 5; i++) {
@@ -903,12 +946,13 @@ static void bench(void)
         }
     double au = (now() - t0) / reps;
     rain_ctl(&c, FX_DROPS, 1500);
+    c.p.rain.check = 0;                      /* the common job: no sum */
     memset(&rst, 0, sizeof rst);
     t0 = now();
     for (int i = 0; i < reps * 10; i++) rain_run(&c, &rst, vtx, &r, &h);
     double ra = (now() - t0) / (reps * 10);
     printf("host time (this CPU, one thread):\n");
-    printf("  sky picture, 5 bands: %.3f ms (a band %.3f ms: clouds %.3f, glass source %.3f, blur %.3f; %.1f ns a cloud pixel)\n",
+    printf("  sky picture, 5 bands: %.3f ms (a band %.3f ms: clouds %.3f, margins' glass %.3f, blur %.3f; %.1f ns a cloud pixel)\n",
            sky * 1e3, sky * 1e3 / 5, cl * 1e3, src * 1e3, blur * 1e3, cl * 1e9 / (54 * FX_SKY_W));
     printf("  aurora picture, 5 bands: %.3f ms (%.1f ns a pixel)\n", au * 1e3, au * 1e9 / (FX_AURORA_W * FX_AURORA_H));
     printf("  rain, 1,500 drops and 40 splashes: %.3f ms a frame (%.1f ns a quad)\n", ra * 1e3, ra * 1e9 / 1540);

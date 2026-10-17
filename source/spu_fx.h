@@ -74,7 +74,7 @@ enum { FX_SKY = 10, FX_RAIN = 11, FX_AURORA = 12 };
 enum { FX_DROPS = 0, FX_FLAKES = 1 };        /* a rain job's kind */
 
 #define FX_NO_CHECK 0xffffffffu              /* check_row: no row */
-#define FX_KAT 0x1184536du                   /* the report's kat: the known-answer test of the vector helpers */
+#define FX_KAT 0xd9a2b58fu                   /* the report's kat: the known-answer test of the vector helpers */
 
 /* What the app writes for one thread before each job's mailbox word: one
  * 128-byte DMA. Colours are 0x00RRGGBB. Coordinates of the sky are picture
@@ -112,6 +112,7 @@ typedef struct {
             float fall;                      /* the nearest drops' fall in px/s (rain 1,300, snow 90) */
             float ox, oy;                    /* the screen's top left in canvas units */
             float alpha;                     /* 0 to 1: every particle's alpha times this */
+            uint32_t check;                  /* 1: the report's sum (fx_vsum of every vertex sent); 0: sum 0, no pass over the quads */
         } rain;
         struct {
             float gain;                      /* 0 to 1; 1 is the cap (mean brightness at most 20 %) */
@@ -132,7 +133,7 @@ _Static_assert(sizeof(fx_ctl) == 128, "fx_ctl is one 128-byte DMA");
 typedef struct {
     uint32_t magic;                          /* FX_MAGIC once the thread wrote the report */
     uint32_t index, mode;                    /* from arg2; mode: the job's mode */
-    uint32_t sum;                            /* sky, aurora: the word sum of check_row; rain: of every word sent */
+    uint32_t sum;                            /* sky, aurora: the word sum of check_row; rain: of every word sent (p.rain.check), else 0 */
     uint64_t arg0, arg1, arg2;               /* the three arguments main received */
     uint64_t count;                          /* the jobs done */
     uint32_t serial;                         /* the job (the block's serial) */
