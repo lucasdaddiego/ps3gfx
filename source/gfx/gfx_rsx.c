@@ -378,7 +378,10 @@ int gfx_be_copy(const void *src, void *dst, u32 bytes)
     if (gcmAddressToOffset(s, &off)) return GFX_COPY_ERANGE;
     for (u32 done = 0; done < bytes;) {
         u32 n = bytes - done > STAGE_BYTES ? STAGE_BYTES : bytes - done, lines = n / LINE, tail = n % LINE;
-        flush_lines(io + STAGE_AT, n);
+        /* Dirty vertices only before the first round, the largest: between
+         * rounds the PPU only reads the stage, and the pass after each
+         * transfer leaves no stale line. */
+        if (!done) flush_lines(io + STAGE_AT, n);
         need(21);
         wp[0] = 2 << 18 | 1 << 13 | 0x0184;  /* NV0039 DMA_BUFFER_IN, DMA_BUFFER_OUT */
         wp[1] = 0xfeed0000;                  /* from local memory */
