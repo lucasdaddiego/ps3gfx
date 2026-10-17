@@ -6,9 +6,14 @@
  * hands each finished piece to an fx_io (the SPU's DMA, the host's memcpy).
  *
  * The SPU's float arithmetic truncates and has no denormals, so an SPU
- * picture and a host picture can differ in the last bit of a channel. The
- * blur is integer arithmetic, the same bits on both. On the host, build
- * with -ffp-contract=off: a fused multiply-add changes the host's bits.
+ * picture and a host picture can differ by 1 in a channel, and a cloud
+ * alpha under 0x30 by 0x10 (one dither step: one side may keep a texel that
+ * the alpha test drops on the other). The blur is integer arithmetic, so
+ * the glass also differs by at most 1. The rain's positions differ in the
+ * last bits, more with each job: when a drop goes back to the top one job
+ * apart on the two sides, the random numbers go to other drops, and from
+ * then on the two rain states differ. On the host, build with
+ * -ffp-contract=off: a fused multiply-add changes the host's bits.
  *
  * The local store (spu/fx/main.c): the noise table 16 KB, the rain's
  * particles 24.6 KB, and one union of the jobs' buffers (sky 73 KB, aurora
@@ -109,8 +114,12 @@ static inline fxu fxu_shl(fxu a, uint32_t n) FX_U(a.u[k] << n)
 static inline fxu fxu_shr(fxu a, uint32_t n) FX_U(a.u[k] >> n)
 static inline fxu fxu_gt(fxu a, fxu b) FX_U(a.u[k] > b.u[k] ? 0xffffffffu : 0)
 static inline fxu fxu_sel(fxu a, fxu b, fxu m) FX_U(m.u[k] ? b.u[k] : a.u[k])
-/* as the SPU's cfltu: toward zero, saturated (no NaN reaches it) */
-static inline fxu fx_tou(fxv a) FX_U(!(a.f[k] > 0.0f) ? 0u : a.f[k] >= 4294967040.0f ? 0xffffffffu : (uint32_t)a.f[k])
+/* as the SPU's cfltu: toward zero, 0 for a negative value, 0xffffffff from
+ * 2^32 (the largest float under 2^32, 2^32 - 256, converts exactly). A NaN
+ * gives 0 here, but the SPU has no NaN and reads its bits as a large
+ * number: the drivers clamp or wrap every float of the block that reaches
+ * a conversion, so no NaN reaches it. */
+static inline fxu fx_tou(fxv a) FX_U(!(a.f[k] > 0.0f) ? 0u : a.f[k] >= 4294967296.0f ? 0xffffffffu : (uint32_t)a.f[k])
 static inline fxv fx_tof(fxu a) FX_V((float)a.u[k])
 static inline fxu fx_bits(fxv a) { fxu r; memcpy(&r, &a, sizeof r); return r; }
 static inline fxv fx_float(fxu a) { fxv r; memcpy(&r, &a, sizeof r); return r; }
@@ -202,8 +211,8 @@ static inline uint32_t fx_rand(uint32_t *s)
 }
 static inline float fx_rnd(uint32_t *s) { return (float)(fx_rand(s) >> 8) * (1.0f / 16777216.0f); }
 
-/* sin(2 pi f) for any f, about 2e-4: the quarter wave by a degree-7 Taylor
- * polynomial (scalar) */
+/* sin(2 pi f) for |f| < 2^31 (its floor is an int32_t), about 2e-4: the
+ * quarter wave by a degree-7 Taylor polynomial (scalar) */
 static inline float fx_sin2pi(float f)
 {
     int32_t i = (int32_t)f;
@@ -340,8 +349,10 @@ static inline void fx_sky_prep(const fx_ctl *c, fx_sky_k *k)
         for (int j = 0; j < 4; j++) k->sky[j][i] = fx_ch(c->p.sky.sky[j], i);
     }
     k->edge_amt = fx_clampf(c->p.sky.edge_amt, 0.0f, 1.0f);
-    k->sun_x = c->p.sky.sun_x;
-    k->sun_y = c->p.sky.sun_y;
+    /* the sun in a wide finite range: past it the light (160 px) reaches no
+     * pixel, so the same picture; a NaN goes to the range's corner */
+    k->sun_x = fx_clampf(c->p.sky.sun_x, -4096.0f, 4096.0f);
+    k->sun_y = fx_clampf(c->p.sky.sun_y, -4096.0f, 4096.0f);
     k->sun_k = 1.0f / (160.0f * 160.0f);
     k->sun_gain = fx_clampf(c->p.sky.sun_gain, 0.0f, 1.0f) * 0.35f;
     k->flash = fx_clampf(c->p.sky.flash, 0.0f, 1.0f) * 0.6f;
@@ -377,6 +388,13 @@ static inline fxv fx_cloud_n(const fx_sky_k *k, const uint32_t *tab, fxv X, fxv 
     return fx_madd(n4, FXV(FX_CLOUD_W4), fx_madd(n5, FXV(FX_CLOUD_W5), n));
 }
 
+/* channel c of the cloud colour: the light from the core's colour to the
+ * lit side's, then the edge colour by e */
+static inline fxv fx_cloud_ch(const fx_sky_k *k, int c, fxv light, fxv e)
+{
+    return fx_mix(fx_madd(FXV(k->lit[c] - k->shade[c]), light, FXV(k->shade[c])), FXV(k->edge[c]), e);
+}
+
 /* Four cloud samples: the colour (0 to 255, also where the alpha is 0) and
  * the alpha (0 to 255, not dithered). The density d is a smooth step over
  * the band (FX_CLOUD_BAND wide: a crisp edge); the light falls with the
@@ -399,10 +417,11 @@ static inline void fx_cloud4(const fx_sky_k *k, const uint32_t *tab, fxv X, fxv 
     light = fx_madd(fx_sub(hf, FXV(0.5f)), FXV(FX_CLOUD_TEX), light);
     light = fx_madd(sun, FXV(k->sun_gain), light);
     fxv e = fx_nmsub(d, FXV(k->edge_amt), FXV(k->edge_amt));             /* edge_amt (1 - d) */
-    for (int c = 0; c < 3; c++) {
-        fxv col = fx_madd(FXV(k->lit[c] - k->shade[c]), light, FXV(k->shade[c]));
-        rgb[c] = fx_mix(col, FXV(k->edge[c]), e);
-    }
+    /* the channels by hand: spu-gcc 7.2 -O2 keeps a loop of three (and has
+     * no #pragma GCC unroll) */
+    rgb[0] = fx_cloud_ch(k, 0, light, e);
+    rgb[1] = fx_cloud_ch(k, 1, light, e);
+    rgb[2] = fx_cloud_ch(k, 2, light, e);
 }
 
 /* The 4 x 4 ordered dither: alpha under 0x30 goes to a multiple of 0x10
@@ -472,7 +491,9 @@ static inline void fx_glass_src(const fx_sky_k *k, const uint32_t *tab, uint32_t
         fxv rgb[3], a;
         fx_cloud4(k, tab, X, Y, fade, rgb, &a);
         fxv t = fx_mul(a, FXV(1.0f / 255.0f));
-        for (int c = 0; c < 3; c++) h[c][i] = fx_byte(fx_mix(FXV(s[c]), rgb[c], t));
+        h[0][i] = fx_byte(fx_mix(FXV(s[0]), rgb[0], t));                 /* by hand, as in fx_cloud4 */
+        h[1][i] = fx_byte(fx_mix(FXV(s[1]), rgb[1], t));
+        h[2][i] = fx_byte(fx_mix(FXV(s[2]), rgb[2], t));
         X = fx_add(X, FXV(8.0f));
     }
 }
@@ -585,7 +606,7 @@ static inline uint32_t fx_sky_job(const fx_ctl *c, const uint32_t *tab, fx_sky_w
     fx_sky_k k;
     fx_sky_prep(c, &k);
     rec->check_row = FX_NO_CHECK;
-    rec->sum = rec->sum2 = 0;
+    rec->sum = rec->sum2 = rec->quads = 0;
     uint32_t n = 0;
     for (uint32_t y = y0; y < y1; y++, n++) {
         uint32_t b = n & 1;
@@ -673,10 +694,22 @@ static inline fxu fx_star_hash(fxu x, uint32_t y, uint32_t s)
 
 #define FX_STAR_T 4772185u                   /* 2^32 / 900: one pixel in 900 is a star */
 
+/* curtain i at the four columns x of row Y: its light into rgb, green at
+ * the base to violet 90 rows above */
+static inline void fx_curtain(const fx_aur_cols *col, int i, int x, fxv Y, fxv rgb[3])
+{
+    static const float G[3] = {0x3c, 0xf0, 0xa0}, V[3] = {0x8a, 0x5c, 0xff};   /* AURORA_G, AURORA_V */
+    fxv d = fx_sub(*(const fxv *)(col->base[i] + x), Y);              /* > 0: above the base */
+    fxu up = fx_gt(d, FXV(0.0f));
+    fxv e = fx_sel(fx_mul(d, FXV(-0.577f)), fx_mul(d, FXV(0.030826f)), up);   /* e^(-d / 46.8) above, 2^(d / 1.73) under */
+    fxv b = fx_mul(*(const fxv *)(col->amp[i] + x), fx_exp2n(e));
+    fxv hue = fx_clamp01(fx_mul(d, FXV(1.0f / 90.0f)));
+    for (int ch = 0; ch < 3; ch++) rgb[ch] = fx_madd(fx_madd(FXV(V[ch] - G[ch]), hue, FXV(G[ch])), b, rgb[ch]);
+}
+
 /* aurora row y (FX_AURORA_W opaque words) into out; its word sum */
 static inline uint32_t fx_aurora_row(const fx_ctl *c, const fx_aur_cols *col, uint32_t y, uint32_t *out)
 {
-    static const float G[3] = {0x3c, 0xf0, 0xa0}, V[3] = {0x8a, 0x5c, 0xff};   /* AURORA_G, AURORA_V */
     float f = ((float)y + 0.5f) * (1.0f / FX_AURORA_H), sky[3];
     for (int i = 0; i < 3; i++)
         sky[i] = fx_ch(c->p.aurora.top, i) + (fx_ch(c->p.aurora.bottom, i) - fx_ch(c->p.aurora.top, i)) * f;
@@ -686,14 +719,9 @@ static inline uint32_t fx_aurora_row(const fx_ctl *c, const fx_aur_cols *col, ui
     fxu X = fxu4(0, 1, 2, 3), sum = FXU(0);
     for (int x = 0; x < FX_AURORA_W; x += 4) {
         fxv rgb[3] = {FXV(sky[0]), FXV(sky[1]), FXV(sky[2])};
-        for (int i = 0; i < 3; i++) {
-            fxv d = fx_sub(*(const fxv *)(col->base[i] + x), Y);              /* > 0: above the base */
-            fxu up = fx_gt(d, FXV(0.0f));
-            fxv e = fx_sel(fx_mul(d, FXV(-0.577f)), fx_mul(d, FXV(0.030826f)), up);   /* e^(-d / 46.8) above, 2^(d / 1.73) under */
-            fxv b = fx_mul(*(const fxv *)(col->amp[i] + x), fx_exp2n(e));
-            fxv hue = fx_clamp01(fx_mul(d, FXV(1.0f / 90.0f)));
-            for (int ch = 0; ch < 3; ch++) rgb[ch] = fx_madd(fx_madd(FXV(V[ch] - G[ch]), hue, FXV(G[ch])), b, rgb[ch]);
-        }
+        fx_curtain(col, 0, x, Y, rgb);                                     /* by hand, as in fx_cloud4 */
+        fx_curtain(col, 1, x, Y, rgb);
+        fx_curtain(col, 2, x, Y, rgb);
         fxu h = fx_star_hash(X, y, s);
         fxu star = fxu_gt(FXU(FX_STAR_T), h);
         fxv ph = fx_mul(fx_tof(fxu_and(h, FXU(255))), FXV(1.0f / 256.0f));
@@ -722,7 +750,7 @@ static inline uint32_t fx_aurora_job(const fx_ctl *c, const uint32_t *tab, fx_au
     if (c->y0 >= c->y1 || c->y1 > FX_AURORA_H) return FX_EXIT_CTL;
     fx_aurora_prep(c, tab, &ws->cols);
     rec->check_row = FX_NO_CHECK;
-    rec->sum = rec->sum2 = 0;
+    rec->sum = rec->sum2 = rec->quads = 0;
     uint32_t n = 0;
     for (uint32_t y = c->y0; y < c->y1; y++, n++) {
         uint32_t b = n & 1;
@@ -823,7 +851,8 @@ static inline fx_vtx *fx_quad(fx_vtx *q, const float *x, const float *y, const u
 
 /* the rain job's numbers */
 typedef struct {
-    float dt, wind, fall, ox, oy, alpha, time;
+    float dt, wind, fall, ox, oy, alpha;
+    float sway;                              /* the snow's sway phase in turns: 0.5 Hz times the time */
     uint32_t rgb;
 } fx_rain_k;
 
@@ -870,7 +899,7 @@ static inline fx_vtx *fx_flake_step(fx_rain_state *st, const fx_rain_k *k, uint3
     p->y += p->vy * k->dt;
     p->x = fx_xwrap(p->x + k->wind * 0.35f * k->dt);
     if (p->y - h > FX_SCREEN_H) fx_spawn(st, i, k->fall, 0);
-    float cx = k->ox + p->x + 20.0f * fx_sin2pi(0.5f * k->time + p->k), cy = k->oy + p->y;
+    float cx = k->ox + p->x + 20.0f * fx_sin2pi(k->sway + p->k), cy = k->oy + p->y;
     uint32_t a = (uint32_t)(fx_clampf(al[i % 3] * k->alpha, 0.0f, 1.0f) * 255.0f + 0.5f);
     const float x[4] = {cx - h, cx + h, cx + h, cx - h}, y[4] = {cy - h, cy - h, cy + h, cy + h};
     const uint32_t c[4] = {k->rgb << 8 | a, k->rgb << 8 | a, k->rgb << 8 | a, k->rgb << 8 | a};
@@ -913,7 +942,10 @@ static inline uint32_t fx_rain_job(const fx_ctl *c, fx_rain_state *st, fx_vtx (*
     k.ox = c->p.rain.ox;
     k.oy = c->p.rain.oy;
     k.alpha = fx_clampf(c->p.rain.alpha, 0.0f, 1.0f);
-    k.time = c->time;
+    /* fx_sin2pi takes the phase to an int32_t: a NaN, an inf or a time past
+     * 2^25 s gives phase 0 */
+    float sway = 0.5f * c->time;
+    k.sway = sway > -16777216.0f && sway < 16777216.0f ? sway : 0.0f;
     k.rgb = c->p.rain.rgb & 0xffffff;
     if (c->p.rain.reset || !st->ready || st->kind != kind || st->seed != c->seed) {
         st->kind = kind;

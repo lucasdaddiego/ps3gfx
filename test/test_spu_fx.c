@@ -1,14 +1,17 @@
 /* Host test of the effects program's contract and kernels (source/spu_fx.h,
  * source/spu_fx_kern.h): the sizes and the layout; the known-answer test;
- * FX_SKY's band equality (each band job alone gives its rows of the full
- * picture, the glass rows with their margin too), its determinism, the
- * coverage ends, the RGB rule under alpha 0 and the dither below 0x30; the
- * blur (flat in, flat out; the weights of three box passes sum to 343 per
- * axis and spread an impulse symmetrically); FX_AURORA's band equality and
- * its brightness cap; FX_RAIN's count, bounds, slant against the wind, cap,
- * determinism and snow; the jobs' refusals; and that every driver waits for
- * a buffer before it fills it again. The drivers run with a host fx_io that
- * copies each piece where the SPU's DMA would put it.
+ * fx_tou at cfltu's edges; FX_SKY's band equality (each band job alone
+ * gives its rows of the full picture, the glass rows with their margin
+ * too), its determinism, the coverage ends, the RGB rule under alpha 0, the
+ * dither below 0x30 and a NaN or far sun; the blur (flat in, flat out; the
+ * weights of three box passes sum to 343 per axis and spread an impulse
+ * symmetrically); FX_AURORA's band equality and its brightness cap;
+ * FX_RAIN's count, bounds, slant against the wind, cap, determinism, snow
+ * and a NaN or huge time; quads 0 in a sky or aurora report after a rain
+ * job; the jobs' refusals; and that every driver waits for a buffer before
+ * it fills it again. The drivers run with a host fx_io that copies each
+ * piece where the SPU's DMA would put it and checks at the wait that the
+ * piece did not change.
  *
  *   cc -std=c99 -O2 -Wall -Wextra -ffp-contract=off -I source -I source/gfx -I tools/preview/stub \
  *      -o test_spu_fx test/test_spu_fx.c -lm && ./test_spu_fx
@@ -33,12 +36,25 @@ static int fails;
 
 /* ---- the host fx_io ------------------------------------------------------- */
 
+static uint32_t fnv(const void *p, size_t n)
+{
+    const uint8_t *b = p;
+    uint32_t h = 0x811c9dc5u;
+    for (size_t i = 0; i < n; i++) h = (h ^ b[i]) * 0x01000193u;
+    return h;
+}
+
+/* The SPU's DMA may read the local store until the wait: a put keeps the
+ * piece's place, length and hash, and a piece that changed before its
+ * wait is an error (the driver filled the buffer too early). */
 typedef struct {
     fx_io io;
     uint8_t *dst[2];
     size_t size[2];
     int pending[2], bad, puts;
     uint32_t bytes;
+    const void *ls[2];
+    uint32_t len[2], hash[2];
 } host_io;
 
 static void h_put(fx_io *io, uint32_t out, uint32_t offset, const void *ls, uint32_t bytes, uint32_t buf)
@@ -52,10 +68,22 @@ static void h_put(fx_io *io, uint32_t out, uint32_t offset, const void *ls, uint
     }
     memcpy(h->dst[out] + offset, ls, bytes);
     h->pending[buf] = 1;
+    h->ls[buf] = ls;
+    h->len[buf] = bytes;
+    h->hash[buf] = fnv(ls, bytes);
     h->bytes += bytes;
 }
 
-static void h_wait(fx_io *io, uint32_t buf) { ((host_io *)io)->pending[buf] = 0; }
+static void h_wait(fx_io *io, uint32_t buf)
+{
+    host_io *h = (host_io *)io;
+    if (buf > 1) {
+        h->bad++;
+        return;
+    }
+    if (h->pending[buf] && fnv(h->ls[buf], h->len[buf]) != h->hash[buf]) h->bad++;
+    h->pending[buf] = 0;
+}
 
 static void io_init(host_io *h, void *d0, size_t s0, void *d1, size_t s1)
 {
@@ -153,14 +181,6 @@ static uint32_t sky_run(const fx_ctl *c, uint32_t cap, uint32_t *p, uint32_t *g,
     return fx_sky_job(c, tab, &sws, band, cap, &h->io, rec);
 }
 
-static uint32_t fnv(const void *p, size_t n)
-{
-    const uint8_t *b = p;
-    uint32_t h = 0x811c9dc5u;
-    for (size_t i = 0; i < n; i++) h = (h ^ b[i]) * 0x01000193u;
-    return h;
-}
-
 /* ---- the contract ----------------------------------------------------------------- */
 
 static void test_contract(void)
@@ -194,6 +214,12 @@ static void test_contract(void)
     uint32_t k = fx_kat();
     if (k != FX_KAT) printf("fx_kat 0x%08x, FX_KAT 0x%08x\n", k, FX_KAT);
     CHECK(k == FX_KAT);
+    /* fx_tou at cfltu's edges: 2^32 - 256 (the largest float under 2^32) converts exactly, 2^32 and up saturate */
+    fxu t = fx_tou(fxv4(4294967040.0f, 4294967296.0f, INFINITY, 1e30f));
+    CHECK(fxu_lane(t, 0) == 0xffffff00u && fxu_lane(t, 1) == 0xffffffffu && fxu_lane(t, 2) == 0xffffffffu &&
+          fxu_lane(t, 3) == 0xffffffffu);
+    t = fx_tou(fxv4(-1.0f, 0.99f, 1.0f, 2147483648.0f));
+    CHECK(fxu_lane(t, 0) == 0 && fxu_lane(t, 1) == 0 && fxu_lane(t, 2) == 1 && fxu_lane(t, 3) == 0x80000000u);
 }
 
 /* ---- FX_SKY ------------------------------------------------------------------------ */
@@ -274,6 +300,18 @@ static void test_sky(void)
     uint32_t min = 255;
     for (int i = 0; i < FX_SKY_H * FX_SKY_W; i++) min = (pic[i] >> 24) < min ? pic[i] >> 24 : min;
     CHECK(min >= 0x30);
+    /* the sun at a NaN, an inf or far away: the picture without the sun's light */
+    sky_ctl(&c, DAY);
+    c.p.sky.sun_gain = 0.0f;
+    sky_run(&c, FX_GLASS_H, pic, glass, &r, &h);
+    static const float suns[][2] = {{NAN, 40.0f}, {330.0f, NAN}, {INFINITY, -INFINITY}, {-1e30f, 40.0f}};
+    for (unsigned i = 0; i < sizeof suns / sizeof suns[0]; i++) {
+        sky_ctl(&c, DAY);
+        c.p.sky.sun_x = suns[i][0];
+        c.p.sky.sun_y = suns[i][1];
+        sky_run(&c, FX_GLASS_H, pic2, glass2, &r, &h);
+        CHECK(memcmp(pic, pic2, sizeof pic) == 0 && memcmp(glass, glass2, sizeof glass) == 0);
+    }
     /* the refusals: nothing written */
     sky_ctl(&c, DAY);
     static const uint32_t bad[][2] = {{1, 54}, {0, 53}, {54, 54}, {60, 54}, {0, 272}, {54, 112}, {100, 160}};
@@ -616,6 +654,33 @@ static void test_rain(void)
             if (f == 60 && rst.d[i].y > y_first[i]) CHECK(rst.d[i].y - y_first[i] <= 99.1f && rst.d[i].y - y_first[i] >= 48.0f);
         }
     }
+    /* the snow at a NaN, an inf or a time past 2^25 s: the sway of time 0; under it a sway (no int32_t overflow) */
+    rain_ctl(&c, FX_FLAKES, 300);
+    memset(&rst, 0, sizeof rst);
+    rain_run(&c, &rst, vtx, &r, &h);
+    static const float bad_t[] = {NAN, INFINITY, -INFINITY, 1e10f};
+    for (unsigned i = 0; i < sizeof bad_t / sizeof bad_t[0]; i++) {
+        c.time = bad_t[i];
+        memset(&rst2, 0, sizeof rst2);
+        CHECK(rain_run(&c, &rst2, vtx2, &r, &h) == 0 && memcmp(vtx, vtx2, 300 * 80) == 0);
+    }
+    c.time = 3e7f;
+    memset(&rst2, 0, sizeof rst2);
+    CHECK(rain_run(&c, &rst2, vtx2, &r, &h) == 0 && memcmp(vtx, vtx2, 300 * 80) != 0);
+    for (int i = 0; i < 300 * 4; i++) CHECK(isfinite(vtx2[i].x));
+    /* a sky or an aurora job after a rain job in the same report: quads 0 */
+    rain_ctl(&c, FX_DROPS, 1500);
+    CHECK(rain_run(&c, &rst, vtx, &r, &h) == 0 && r.quads == 1540);
+    fx_ctl cs;
+    sky_ctl(&cs, DAY);
+    cs.y1 = 54;
+    io_init(&h, pic, sizeof pic, glass, sizeof glass);
+    CHECK(fx_sky_job(&cs, tab, &sws, band, FX_GLASS_BAND_MAX, &h.io, &r) == 0 && r.quads == 0);
+    CHECK(rain_run(&c, &rst, vtx, &r, &h) == 0 && r.quads == 1540);
+    aurora_ctl(&cs, 0.0f, 41);
+    cs.y1 = 72;
+    io_init(&h, aur, sizeof aur, NULL, 0);
+    CHECK(fx_aurora_job(&cs, tab, &aws, &h.io, &r) == 0 && r.quads == 0);
     /* the refusals */
     rain_ctl(&c, FX_DROPS, 1501);
     CHECK(rain_run(&c, &rst, vtx, &r, &h) == FX_EXIT_CTL && h.puts == 0);

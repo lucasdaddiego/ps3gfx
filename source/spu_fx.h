@@ -142,7 +142,7 @@ typedef struct {
     uint32_t ticks;                          /* decrementer ticks of this job (the timebase, 79.8 MHz) */
     uint32_t check_row;                      /* the row of sum, FX_NO_CHECK when it is not in the job's rows */
     uint32_t sum2;                           /* sky: the word sum of glass row check_row / 2, when in the job */
-    uint32_t quads;                          /* rain: the quads written */
+    uint32_t quads;                          /* rain: the quads written; sky, aurora: 0 */
     uint32_t kat;                            /* FX_KAT when the vector helpers gave the known answers at the start */
     uint32_t pad[11];
 } __attribute__((aligned(128))) fx_rec;
