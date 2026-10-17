@@ -198,7 +198,6 @@ jobs:
           cat > allowed.txt <<'EOF'
           cosf
           exit
-          floorf
           free
           gcmAddressToOffset
           gcmGetConfiguration

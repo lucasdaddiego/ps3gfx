@@ -178,11 +178,12 @@ static void page_icons(void)
         icon(IC_M_SUN_FILL + 2 * k, cx, cy, 0xffd36b55);
         icon(IC_M_SUN_LINE + 2 * k, cx, cy, WHITE);
     }
-    for (int k = 0; k <= (IC_L_SNOWFLAKE_LINE - IC_L_SUN_FILL) / 2; k++) {
+    for (int k = 0; k <= (IC_L_LIGHTNING_LINE - IC_L_SUN_FILL) / 2; k++) {
         float cx = MG + 100 + k * 220, cy = TOP + 330;
         icon(IC_L_SUN_FILL + 2 * k, cx, cy, 0x6cb8ff55);
         icon(IC_L_SUN_LINE + 2 * k, cx, cy, WHITE);
     }
+    icon(IC_L_SNOWFLAKE_LINE, MG + 100 + 4 * 220, TOP + 330, WHITE);   /* the snowflake has no fill */
     icon_rot(IC_L_SUN_FILL, MG + 1300, TOP + 330, 0.3f, 1, 0xffd36b55);
     icon_rot(IC_L_SUN_LINE, MG + 1300, TOP + 330, 0.3f, 1, 0xffd36bff);
     icon_rot(IC_L_CLOUD_LINE, MG + 1560, TOP + 330, 0, 0.5f, GREY);

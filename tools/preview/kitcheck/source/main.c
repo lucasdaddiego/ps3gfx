@@ -376,7 +376,7 @@ static void init_failures(void)
     for (int k = 0; k < 2; k++) {
         fflush(stdout);
         pid_t pid = fork();
-        if (pid == 0) {                      /* digits: 295,680 and 515,968 bytes fit, 1,133,824 do not; icons: 39,168 and 154,752, not 559,872 */
+        if (pid == 0) {                      /* digits: 295,680 and 515,968 bytes fit, 1,133,824 do not; icons: 26,624 and 150,784, not 497,664 */
             int good = k == 0 ? init_fails(digits_init, 1500000) && digits_h(D_M) == 0 && digits_w(D_M, "1") == 0
                               : init_fails(icons_init, 600000) && icon_size(IC_S_CARET_UP) == 0;
             fflush(stdout);
