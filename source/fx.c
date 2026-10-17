@@ -127,14 +127,28 @@ static void normal(const float *pts, int a, int b, float *nx, float *ny)
     *ny = -dx / len;
 }
 
-/* The offset of point i's two strip vertices from it: the miter of the two
- * segments that meet there, hw long across each, at most 2 hw. */
-static void miter(const float *pts, int n, int i, float hw, float *ox, float *oy)
+/* The normal of the first segment from point i on that has a length (a
+ * repeated point makes none), 0, 0 when no segment has; *j is its first
+ * point (n - 1 for none). */
+static void next_normal(const float *pts, int n, int i, int *j, float *nx, float *ny)
 {
-    float ax = 0, ay = 0, bx = 0, by = 0;
-    if (i > 0) normal(pts, i - 1, i, &ax, &ay);
-    if (i < n - 1) normal(pts, i, i + 1, &bx, &by);
-    if (ax == 0 && ay == 0) {                /* an end, or a segment of no length: the other one */
+    *nx = *ny = 0;
+    for (; i < n - 1; i++) {
+        normal(pts, i, i + 1, nx, ny);
+        if (*nx != 0 || *ny != 0) break;
+    }
+    *j = i;
+}
+
+/* The offset of a point's two strip vertices from it: the miter of the
+ * segments before and after it (their unit normals a and b), hw long across
+ * each, at most 2 hw. Never inlined (ppu-gcc 7.2 does not inline it either):
+ * inlined, a compiler that fuses across statements (gcc's default
+ * -ffp-contract=fast) can make the caller's x + ox one fmadds, and the
+ * vertices move by an ulp. */
+static __attribute__((noinline)) void miter(float ax, float ay, float bx, float by, float hw, float *ox, float *oy)
+{
+    if (ax == 0 && ay == 0) {                /* an end: the other segment */
         ax = bx;
         ay = by;
     }
@@ -143,7 +157,7 @@ static void miter(const float *pts, int n, int i, float hw, float *ox, float *oy
         by = ay;
     }
     float mx = ax + bx, my = ay + by, ml = sqrtf(mx * mx + my * my);
-    if (ml <= 0) {                           /* a turn back, or no length at all: square across */
+    if (ml <= 0) {                           /* a turn back: square across */
         *ox = ax * hw;
         *oy = ay * hw;
         return;
@@ -156,35 +170,67 @@ static void miter(const float *pts, int n, int i, float hw, float *ox, float *oy
 }
 
 /* A strip in pieces of at most PTS_MAX points, each from the last point of
- * the one before. */
+ * the one before. Each segment's normal is made once: a is the normal of the
+ * segment before the point, b of the next segment with a length (it starts
+ * at point j). A repeated point gets the rows of the point it repeats: its
+ * triangles have no area. */
 void strip(const float *pts, int n, float width, u32 rgba)
 {
     if (n < 2 || width <= 0) return;
-    float hw = width / 2;
+    float hw = width / 2, ax = 0, ay = 0, bx, by;
+    int j;
+    next_normal(pts, n, 0, &j, &bx, &by);
+    if (j == n - 1) return;                  /* no length at all */
     for (int s = 0; s < n - 1; s += PTS_MAX - 1) {
         int e = n - 1 - s > PTS_MAX - 1 ? s + PTS_MAX - 1 : n - 1;
         gfx_texture(NULL);
         gfx_vtx *q = gfx_prim(GFX_TRIANGLE_STRIP, 2 * (e - s + 1));
         for (int i = s; i <= e; i++) {
+            if (i > j) {                     /* past segment j: it is the one before */
+                ax = bx;
+                ay = by;
+                next_normal(pts, n, i, &j, &bx, &by);
+            }
             float ox, oy, x = pts[2 * i], y = pts[2 * i + 1];
-            miter(pts, n, i, hw, &ox, &oy);
+            miter(ax, ay, bx, by, hw, &ox, &oy);
             q = gfx_put(q, x + ox, y + oy, rgba, 0, 0);
             q = gfx_put(q, x - ox, y - oy, rgba, 0, 0);
         }
     }
 }
 
+/* 1 when the segment from point i to i + 1 crosses base_y (its ends on its
+ * two sides). */
+static int crosses(const float *pts, int i, float base_y)
+{
+    float a = pts[2 * i + 1] - base_y, b = pts[2 * i + 3] - base_y;
+    return (a < 0 && b > 0) || (a > 0 && b < 0);
+}
+
+/* A strip in pieces of at most GFX_PRIM_MAX vertices, each from the last
+ * point of the one before. Where a segment crosses base_y, its quad would be
+ * a bowtie whose triangles overlap: a pair of vertices at the crossing
+ * splits it into two triangles that meet there (the two between them have no
+ * area). */
 void area(const float *pts, int n, float base_y, u32 rgba_top, u32 rgba_base)
 {
     if (n < 2) return;
-    for (int s = 0; s < n - 1; s += PTS_MAX - 1) {
-        int e = n - 1 - s > PTS_MAX - 1 ? s + PTS_MAX - 1 : n - 1;
+    for (int s = 0; s < n - 1;) {
+        int e = s, nv = 2;                   /* the piece: points s to e, nv vertices */
+        while (e < n - 1 && nv + 2 + 2 * crosses(pts, e, base_y) <= GFX_PRIM_MAX) nv += 2 + 2 * crosses(pts, e++, base_y);
         gfx_texture(NULL);
-        gfx_vtx *q = gfx_prim(GFX_TRIANGLE_STRIP, 2 * (e - s + 1));
+        gfx_vtx *q = gfx_prim(GFX_TRIANGLE_STRIP, nv);
         for (int i = s; i <= e; i++) {
+            if (i > s && crosses(pts, i - 1, base_y)) {
+                float x0 = pts[2 * i - 2], y0 = pts[2 * i - 1];
+                float x = x0 + (pts[2 * i] - x0) * ((base_y - y0) / (pts[2 * i + 1] - y0));
+                q = gfx_put(q, x, base_y, rgba_base, 0, 0);
+                q = gfx_put(q, x, base_y, rgba_base, 0, 0);
+            }
             q = gfx_put(q, pts[2 * i], pts[2 * i + 1], rgba_top, 0, 0);
             q = gfx_put(q, pts[2 * i], base_y, rgba_base, 0, 0);
         }
+        s = e;
     }
 }
 
@@ -219,7 +265,8 @@ static void aa_quad(const aav *a, const aav *b, const aav *c, const aav *d)
     aq[aqn++] = *d;
 }
 
-/* The core's half width of a w px line; under 1 px the alpha goes down instead. */
+/* The core's half width of a w px line; under 1 px the alpha goes down instead
+ * (under 16 the alpha test drops the whole line). */
 static float aa_core(float w, u32 *rgba)
 {
     if (w >= 1) return w / 2 - 0.5f;
@@ -248,13 +295,16 @@ static void aa_row(aav *r, float x, float y, float nx, float ny, float hc, u32 i
 }
 
 /* One segment: a 3 x 3 grid of quads, the core between the inner rows and
- * half a pixel in from each end, the feather 1 px wide around it. */
+ * half a pixel in from each end, the feather 1 px wide around it. Under 1 px
+ * long the core has no length and the two end ramps meet in the middle, with
+ * (1 + len) / 2 of ink along: the alpha times 2 len / (1 + len) makes it len. */
 static void aa_seg(float x0, float y0, float x1, float y1, float hc, u32 c)
 {
     float dx = x1 - x0, dy = y1 - y0, len = sqrtf(dx * dx + dy * dy);
     if (len <= 0) return;
     float ux = dx / len, uy = dy / len, nx = uy, ny = -ux, e = len < 1 ? len / 2 : 0.5f;
     u32 z = c & ~0xffu;
+    if (len < 1) c = z | (u32)((float)(c & 255) * 2 * len / (1 + len) + 0.5f);
     aav r[4][4];
     aa_row(r[0], x0 - ux * 0.5f, y0 - uy * 0.5f, nx, ny, hc, z, z);
     aa_row(r[1], x0 + ux * e, y0 + uy * e, nx, ny, hc, c, z);
@@ -281,23 +331,32 @@ void aa_lines(const float *seg, int n, float w, u32 rgba)
 
 /* The polyline: at each point the row across along strip's miter (miter at
  * half width 1, times each offset), the ends half a pixel in, and a row of
- * alpha 0 half a pixel past each end. */
+ * alpha 0 half a pixel past each end. A repeated point is skipped: only the
+ * last copy of a point draws, so the first point is the first one with a
+ * segment, and each next one starts the next segment with a length (or is
+ * the last point). a and b are the normals of the segments before and after
+ * the point, each made once. */
 void aa_strip(const float *pts, int n, float w, u32 rgba)
 {
     if (n < 2 || w <= 0) return;
+    float ax = 0, ay = 0, bx, by;
+    int i, p = 0;                            /* this point, the one before */
+    next_normal(pts, n, 0, &i, &bx, &by);
+    if (i == n - 1) return;                  /* no length at all */
+    int first = i;
     float hc = aa_core(w, &rgba);
     u32 z = rgba & ~0xffu;
     aav prev[4], cur[4], cap[4];
-    for (int i = 0; i < n; i++) {
+    for (;;) {
         float mx, my, x = pts[2 * i], y = pts[2 * i + 1];
-        miter(pts, n, i, 1, &mx, &my);
-        if (i == 0 || i == n - 1) {                       /* an end: the segment's direction, outward */
-            int a = i == 0 ? 1 : n - 2, b = i;
+        miter(ax, ay, bx, by, 1, &mx, &my);
+        if (i == first || i == n - 1) {                   /* an end: the segment's direction, outward */
+            int a = i == first ? i + 1 : p, b = i;
             float dx = pts[2 * b] - pts[2 * a], dy = pts[2 * b + 1] - pts[2 * a + 1], len = sqrtf(dx * dx + dy * dy);
             float ux = len > 0 ? dx / len : 0, uy = len > 0 ? dy / len : 0, e = len < 1 ? len / 2 : 0.5f;
             aa_row(cap, x + ux * 0.5f, y + uy * 0.5f, mx, my, hc, z, z);
             aa_row(cur, x - ux * e, y - uy * e, mx, my, hc, rgba, z);
-            if (i == 0) aa_rows(cap, cur);
+            if (i == first) aa_rows(cap, cur);
             else {
                 aa_rows(prev, cur);
                 aa_rows(cur, cap);
@@ -307,13 +366,21 @@ void aa_strip(const float *pts, int n, float w, u32 rgba)
             aa_rows(prev, cur);
         }
         for (int k = 0; k < 4; k++) prev[k] = cur[k];
+        if (i == n - 1) break;
+        p = i;
+        ax = bx;
+        ay = by;
+        next_normal(pts, n, i + 1, &i, &bx, &by);
     }
     aa_flush();
 }
 
 /* The unit circle in 96 steps, made at the first call (each angle through a
  * volatile, as corners above). A circle takes 16 points under radius 8, 24
- * under 16, 48 under 100, else 96: at most 0.2 px from the true circle. */
+ * under 16, 48 under 100, else 96 (r the outer radius: a ring's outer
+ * feather, a disc's r + 0.5). A chord lies up to r (1 - cos(pi / points))
+ * inside the true circle: 0.15 px under 8, 0.14 under 16, 0.21 under 100,
+ * then r / 1868 (0.2 px at 374, 0.29 at 540). */
 #define CIRC 96
 static float cc[CIRC + 1], cs[CIRC + 1];
 static int circ_made;
@@ -378,35 +445,51 @@ void aa_disc(float cx, float cy, float r, u32 rgba)
     aa_flush();
 }
 
+/* At each point, in at the colour half a pixel in along the miter of its two
+ * edges (their unit normals a and b), out at alpha 0 half a pixel out; the
+ * quads from the point before, and at the end the ones back to the first.
+ * A point equal to the next one (the last to the first too) is skipped, so
+ * the edges have a length; each edge's normal is made once per pass. */
 void aa_poly(const float *pts, int n, u32 rgba)
 {
-    if (n < 3 || n > 64) return;
+    if (n < 3) return;
     u32 z = rgba & ~0xffu;
-    float gx = 0, gy = 0;
-    for (int i = 0; i < n; i++) gx += pts[2 * i], gy += pts[2 * i + 1];
-    gx /= (float)n;
-    gy /= (float)n;
-    aav in[65], out[65], g = {gx, gy, rgba};
+    float gx = 0, gy = 0, ax, ay, bx, by;
+    int m = 0, last = 0;
     for (int i = 0; i < n; i++) {
-        int a = (i + n - 1) % n, b = (i + 1) % n;
-        float ax, ay, bx, by, x = pts[2 * i], y = pts[2 * i + 1];
-        normal(pts, a, i, &ax, &ay);
-        normal(pts, i, b, &bx, &by);
-        float mx = ax + bx, my = ay + by, ml = sqrtf(mx * mx + my * my);
+        normal(pts, i, (i + 1) % n, &bx, &by);
+        if (bx == 0 && by == 0) continue;
+        gx += pts[2 * i], gy += pts[2 * i + 1];
+        m++;
+        last = i;
+    }
+    if (m < 3) return;
+    gx /= (float)m;
+    gy /= (float)m;
+    normal(pts, last, (last + 1) % n, &ax, &ay);   /* the edge into the first point */
+    aav g = {gx, gy, rgba}, in0 = g, out0 = g, pin = g, pout = g;
+    for (int i = 0, first = 1; i < n; i++) {
+        normal(pts, i, (i + 1) % n, &bx, &by);
+        if (bx == 0 && by == 0) continue;
+        float x = pts[2 * i], y = pts[2 * i + 1], mx = ax + bx, my = ay + by, ml = sqrtf(mx * mx + my * my);
         if (ml <= 0) mx = ax, my = ay, ml = 1;
         mx /= ml;
         my /= ml;
         float d = mx * ax + my * ay, k = d > 0.25f ? 1 / d : 4;   /* the miter, at most 4 times */
         if (mx * (x - gx) + my * (y - gy) < 0) k = -k;            /* outward */
-        in[i] = (aav){x - mx * k * 0.5f, y - my * k * 0.5f, rgba};
-        out[i] = (aav){x + mx * k * 0.5f, y + my * k * 0.5f, z};
+        aav in = {x - mx * k * 0.5f, y - my * k * 0.5f, rgba}, out = {x + mx * k * 0.5f, y + my * k * 0.5f, z};
+        if (first) in0 = in, out0 = out, first = 0;
+        else {
+            aa_quad(&g, &pin, &in, &in);
+            aa_quad(&pin, &pout, &out, &in);
+        }
+        pin = in;
+        pout = out;
+        ax = bx;
+        ay = by;
     }
-    in[n] = in[0];
-    out[n] = out[0];
-    for (int i = 0; i < n; i++) {
-        aa_quad(&g, &in[i], &in[i + 1], &in[i + 1]);
-        aa_quad(&in[i], &out[i], &out[i + 1], &in[i + 1]);
-    }
+    aa_quad(&g, &pin, &in0, &in0);
+    aa_quad(&pin, &pout, &out0, &in0);
     aa_flush();
 }
 

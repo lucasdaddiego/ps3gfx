@@ -19,7 +19,9 @@ enum { D_M, D_L, D_XL, D_COUNT };            /* 84, 112 and 168 px (weights 600,
 
 /* The atlases into RSX memory, after ui_init; again: nothing. 0, or -1 when
  * digits.bin is bad or RSX memory is short (then the calls below draw
- * nothing and measure 0). */
+ * nothing and measure 0). A failure stays: a call after it returns -1 at
+ * once and takes no memory (gfx_vram gives none back, so the memory of a
+ * partial init stays taken, and a retry would take more). */
 int digits_init(void);
 
 /* y is the top of the line box, as in text(); the calls return the x after

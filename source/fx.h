@@ -37,10 +37,13 @@ void quad_rot(const gfx_tex *t, float cx, float cy, float w, float h, float angl
               float v1, u32 tint);
 /* A polyline of n points (x, y pairs in pts) width px wide: one triangle
  * strip with mitred joins (a miter at most twice the half width), so a
- * translucent line covers no pixel twice. */
+ * translucent line covers no pixel twice. A repeated point adds no segment
+ * (its triangles have no area). */
 void strip(const float *pts, int n, float width, u32 rgba);
 /* The fill under a polyline down to base_y: rgba_top at the points,
- * rgba_base at base_y (a fade with a lower alpha there). */
+ * rgba_base at base_y (a fade with a lower alpha there). Where the line
+ * crosses base_y the fill goes to the other side of it: two triangles that
+ * meet at the crossing (rgba_base there), so it covers no pixel twice. */
 void area(const float *pts, int n, float base_y, u32 rgba_top, u32 rgba_base);
 
 /* Anti-aliased lines and shapes, untextured: every edge fades from the
@@ -49,21 +52,24 @@ void area(const float *pts, int n, float base_y, u32 rgba_top, u32 rgba_base);
  * w - 1 px at the colour and a 1 px feather on each side: the same ink as
  * a w px line (under 1 px: no core, the alpha times w). Quads that touch
  * and never overlap, so a translucent line covers no pixel twice, sent as
- * GFX_QUADS: consecutive calls join one draw. The alpha test drops the
- * feather's last 16th. */
-/* A segment, its ends feathered too (the ink ends at the end points). */
+ * GFX_QUADS: consecutive calls join one draw. The alpha test (16 of 255)
+ * drops the outer 16 / a of a feather at alpha a (its last 16th at 255),
+ * and the whole line when its alpha, times w under 1 px, is under 16. */
+/* A segment, its ends feathered too (the ink ends at the end points). Under
+ * 1 px long the alpha goes down, so the ink stays the segment's. */
 void aa_line(float x0, float y0, float x1, float y1, float w, u32 rgba);
 /* n separate segments of 4 floats each (x0, y0, x1, y1): dashes, ticks. */
 void aa_lines(const float *seg, int n, float w, u32 rgba);
 /* A polyline of n points with the mitred joins of strip, its two ends
- * feathered. */
+ * feathered. A repeated point is skipped, also at an end. */
 void aa_strip(const float *pts, int n, float w, u32 rgba);
 /* A circle's outline, w px wide, centred on radius r. */
 void aa_ring(float cx, float cy, float r, float w, u32 rgba);
 /* A filled circle: the ink ends at radius r. */
 void aa_disc(float cx, float cy, float r, u32 rgba);
-/* A filled convex polygon of n points (either winding), its ink to the
- * points' outline. */
+/* A filled convex polygon of n points (either winding, any n), its ink to
+ * the points' outline. A repeated point counts once, also a last point equal
+ * to the first (a closed outline). */
 void aa_poly(const float *pts, int n, u32 rgba);
 /* The fringe of round_rect's corners: 1 px outside each corner's arc, from
  * half the alpha at the arc to 0, so a rounded rect drawn with pixel

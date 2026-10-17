@@ -23,15 +23,26 @@ typedef struct {
 
 static iglyph glyphs[IC_COUNT];
 static iset sets[IC_SETS];
-static int done;
+static int done;                             /* 1 after icons_init, -1 after one that failed */
 
 static unsigned rd16(const u8 *p) { return (unsigned)p[0] << 8 | p[1]; }
+
+/* floorf in float adds, as digits.c's floor_px (-mcpu=cell has no frim):
+ * the console's floorf for every float, the host's for every x + 0.5f. */
+static inline float floor_px(float x)
+{
+    const float big = 8388608.0f;
+    if (!(fabsf(x) < big)) return x;
+    float r = x < 0 ? x - big + big : x + big - big;
+    return r > x ? r - 1 : r;
+}
 
 int icons_init(void)
 {
     const u8 *p = icons_bin, *end = icons_bin + icons_bin_size;
     u32 pair[256];
-    if (done) return 0;
+    if (done) return done > 0 ? 0 : -1;
+    done = -1;                               /* until the end: gfx_vram gives no memory back, so a retry would take more */
     if (icons_bin_size < 12 || p[0] != 'P' || p[1] != 'H' || p[2] != 'I' || p[3] != '1') return -1;
     if (rd16(p + 4) != IC_SETS || rd16(p + 6) != IC_COUNT) return -1;
     p += 12;
@@ -87,13 +98,13 @@ int icons_init(void)
     return 0;
 }
 
-int icon_size(int id) { return done && id >= 0 && id < IC_COUNT ? sets[glyphs[id].set].px : 0; }
+int icon_size(int id) { return done > 0 && id >= 0 && id < IC_COUNT ? sets[glyphs[id].set].px : 0; }
 
 void icon(int id, float cx, float cy, u32 rgba)
 {
-    if (!done || id < 0 || id >= IC_COUNT) return;
+    if (done <= 0 || id < 0 || id >= IC_COUNT) return;
     const iglyph *g = &glyphs[id];
-    float x0 = floorf(cx + 0.5f) - g->cx, y0 = floorf(cy + 0.5f) - g->cy, x1 = x0 + g->w, y1 = y0 + g->h;
+    float x0 = floor_px(cx + 0.5f) - g->cx, y0 = floor_px(cy + 0.5f) - g->cy, x1 = x0 + g->w, y1 = y0 + g->h;
     gfx_texture(&sets[g->set].tex);
     gfx_vtx *q = gfx_prim(GFX_QUADS, 4);
     q = gfx_put(q, x0, y0, rgba, g->u0, g->v0);
@@ -105,7 +116,7 @@ void icon(int id, float cx, float cy, u32 rgba)
 
 void icon_rot(int id, float cx, float cy, float angle, float scale, u32 rgba)
 {
-    if (!done || id < 0 || id >= IC_COUNT) return;
+    if (done <= 0 || id < 0 || id >= IC_COUNT) return;
     const iglyph *g = &glyphs[id];
     float c = cosf(angle) * scale, s = sinf(angle) * scale;
     float dx[4] = {-g->cx, g->w - g->cx, g->w - g->cx, -g->cx}, dy[4] = {-g->cy, -g->cy, g->h - g->cy, g->h - g->cy};

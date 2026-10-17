@@ -20,10 +20,23 @@ typedef struct {
 
 static dfont dfonts[D_COUNT];
 static u8 slot[256];                         /* the glyph of a byte plus 1, 0 for none */
-static int done;
+static int done;                             /* 1 after digits_init, -1 after one that failed */
 
 static unsigned rd16(const u8 *p) { return (unsigned)p[0] << 8 | p[1]; }
 static const u8 *align4(const u8 *p) { return p + (4 - (p - digits_bin) % 4) % 4; }
+
+/* floorf in float adds: -mcpu=cell has no frim, so floorf is a library call.
+ * Under 2^23, adding and taking away 2^23 rounds to a whole number, then one
+ * down if that went up; from 2^23 a float is whole, and NaN passes. It gives
+ * the console's floorf for every float (also +0 for -0), and the host's for
+ * every x + 0.5f (never -0 or a signalling NaN). */
+static inline float floor_px(float x)
+{
+    const float big = 8388608.0f;
+    if (!(fabsf(x) < big)) return x;
+    float r = x < 0 ? x - big + big : x + big - big;
+    return r > x ? r - 1 : r;
+}
 
 /* A byte of 4-bit alphas as its two A4R4G4B4 texels in memory order, white
  * also at alpha 0: a bilinear sample (at 720p and 480p) then mixes no black
@@ -40,7 +53,8 @@ int digits_init(void)
 {
     const u8 *p = digits_bin, *end = digits_bin + digits_bin_size;
     u32 pair[256];
-    if (done) return 0;
+    if (done) return done > 0 ? 0 : -1;
+    done = -1;                               /* until the end: gfx_vram gives no memory back, so a retry would take more */
     if (digits_bin_size < 12 || p[0] != 'P' || p[1] != 'H' || p[2] != 'D' || p[3] != '1') return -1;
     int n = rd16(p + 4), count = rd16(p + 6), cols = rd16(p + 8);
     if (n < D_COUNT || count < 1 || count > DG_MAX || !cols) return -1;
@@ -102,7 +116,7 @@ static int glyph_at(const char *s, int i)
     return (int)slot[c] - 1;
 }
 
-static int ok(int size) { return done && size >= 0 && size < D_COUNT; }
+static int ok(int size) { return done > 0 && size >= 0 && size < D_COUNT; }
 
 int digits_w(int size, const char *s)
 {
@@ -123,7 +137,7 @@ float digits(float x, float y, int size, u32 rgba, const char *s)
 {
     if (!ok(size)) return x;
     const dfont *f = &dfonts[size];
-    float px = floorf(x + 0.5f), top = floorf(y + 0.5f) + f->asc - f->base;
+    float px = floor_px(x + 0.5f), top = floor_px(y + 0.5f) + f->asc - f->base;
     float pad = f->pad, cw = f->cw, y1 = top + f->ch;
     gfx_texture(&f->tex);
     for (int i = 0; s[i]; i++) {
@@ -153,12 +167,12 @@ float digits_half(float x, float y, int size, char ch, int half, float scale_y, 
 {
     if (!ok(size)) return x;
     int k = (int)slot[(unsigned char)ch] - 1;
-    float px = floorf(x + 0.5f);
+    float px = floor_px(x + 0.5f);
     if (k < 0) return px;
     const dfont *f = &dfonts[size];
     const dglyph *g = &f->g[k];
     if (scale_y > 0) {
-        float top = floorf(y + 0.5f) + f->asc - f->base, line = top + f->mid;
+        float top = floor_px(y + 0.5f) + f->asc - f->base, line = top + f->mid;
         float x0 = px - f->pad, x1 = x0 + f->cw;
         float vm = g->v0 + (float)f->mid / f->ah;      /* the middle line's row in the atlas */
         float ya, yb, va, vb;

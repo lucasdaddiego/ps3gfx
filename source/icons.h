@@ -19,7 +19,8 @@
 
 /* The atlases into RSX memory, after ui_init; again: nothing. 0, or -1 when
  * icons.bin is bad (or not the one of icons_ids.h) or RSX memory is short;
- * then the calls below draw nothing and icon_size gives 0. */
+ * then the calls below draw nothing and icon_size gives 0. A failure stays:
+ * a call after it returns -1 at once and takes no memory (as digits_init). */
 int icons_init(void);
 
 /* An icon centred at cx, cy: the middle of the glyph's em box, which the two
