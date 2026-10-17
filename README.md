@@ -25,8 +25,10 @@ the memory layout, the source of each RSX word and the shader recipe):
   two halves: the app computes while the RSX draws), `gfx_exit`, `gfx_put`
 - `gfx_last_counts` (the last frame's vertices, draws and drains), `gfx_front` (the colour buffer on the TV,
   between frames)
+- `gfx_copy_to_main` and `gfx_copy_to_main_job`: RSX memory into main memory by the RSX's own DMA (the
+  section "The RSX copy"), `GFX_COPY_MAX`, the codes `GFX_COPY_EARG` to `GFX_COPY_ETIME`
 - the back end for gfx.c only: `gfx_be_init`, `gfx_be_begin`, `gfx_be_viewport`, `gfx_be_draw`, `gfx_be_drain`, `gfx_be_submit`,
-  `gfx_be_wait`, `gfx_be_exit`
+  `gfx_be_wait`, `gfx_be_exit`, `gfx_be_copy`, `gfx_be_nap`
   (`gfx_rsx.c` on the console, the preview's `gfx_soft.c` on the host)
 
 `<ps3gfx/ui.h>`, the frame:
@@ -175,6 +177,67 @@ lines are rough"): the anti-aliased helpers of `fx.h` (`aa_*`), new
 functions in `fx.c` only, so an app that calls no `fx.h` helper links none
 of them: PS3 Health's and Cell Bench's ELFs and link maps stay
 byte-identical.
+
+The addition of 2026-10-16, for PS3 Health's RSX memory test (its reads
+through the mapping take about 0.5 us each): `gfx_copy_to_main` and
+`gfx_copy_to_main_job`. They live in `gfx.c` and `gfx_rsx.c`, because the
+command ring and the context are static there, and PSL1GHT links with no
+`--gc-sections`: every app's ELF gets the new code, so Couch's and Cell
+Bench's ELFs change although they make no call. Their behaviour does not:
+the old functions of `gfx_rsx.o` keep their instructions (only the TOC
+offsets move), no RSX word changes until an app copies, and `gfx_wait`
+reads one more word per frame (a job's request, none).
+
+## The RSX copy
+
+`gfx_copy_to_main(src, dst, bytes)` copies RSX local memory into main
+memory with the RSX's memory-to-memory transfer (NV0039, the words of
+PSL1GHT's `rsxSetTransferData`). `src` is an address that `gfx_vram` or
+`gfx_tex_new` gave; `dst` is any main memory. 0, or a `GFX_COPY_E*` code:
+
+| Code | When |
+|---|---|
+| `GFX_COPY_EARG` (-1) | `src` or `bytes` not a multiple of 128, `bytes` 0 or over `GFX_COPY_MAX` (16 MB) |
+| `GFX_COPY_ERANGE` (-2) | `src` to `src + bytes` is not RSX local memory, or gfx has no picture |
+| `GFX_COPY_EFRAME` (-3) | `gfx_copy_to_main` inside a frame |
+| `GFX_COPY_EBUSY` (-4) | `gfx_copy_to_main_job`: another request waits |
+| `GFX_COPY_ENOFRAME` (-5) | `gfx_copy_to_main_job`: no frame ended in about 2 s to take the request |
+| `GFX_COPY_ETIME` (-6) | the RSX did not finish a round in about 2 s |
+
+How: the RSX copies at most 960 KB a round into the vertex area (the IO
+area from 64 KB to 1 MB, main memory that the RSX can already write and that
+no frame uses between frames), in lines of 4 KB (240 lines a round, under
+the 2047 of one method), then backend label 255 (the fence of the frame).
+The PPU waits for the label with the frame's bounded wait (200 us polls,
+about 2 s), drops the area's lines from its cache (`dcbf` before and after
+the transfer), and copies the round to `dst`. So `dst` needs no mapping and
+no alignment, and the call maps nothing.
+
+Where:
+- `gfx_copy_to_main`: in the drawing thread (the one that calls
+  `gfx_begin` and `gfx_end`), outside a frame. It waits for a submitted
+  frame first (`gfx_wait`). Inside a frame it returns `GFX_COPY_EFRAME`.
+- `gfx_copy_to_main_job`: in another thread, for example a `run_job` job,
+  while the drawing thread draws frames (the job screen does). The call
+  posts one request and waits; the drawing thread runs the copy at the end
+  of its next `gfx_wait`, between two frames. A request that no frame takes
+  in about 2 s is taken back (`GFX_COPY_ENOFRAME`). Never from the drawing
+  thread itself: it would wait 2 s for itself. A job that has no thread
+  (`run_job` runs it in the drawing thread when `sysThreadCreate` fails)
+  gets `GFX_COPY_ENOFRAME`.
+- The drawing thread is busy for the copy: a frame waits for it (about one
+  DMA, one `dcbf` pass and one `memcpy` of 960 KB a round).
+
+Safety: after `GFX_COPY_ETIME` the RSX may still write the vertex area, and
+for a job the drawing thread may still write `dst`: keep `dst` allocated.
+Every later copy then returns `GFX_COPY_ETIME` at once (a job may get
+`GFX_COPY_EBUSY`). The copy writes to RSX memory never, and to main memory
+only the vertex area and `dst`. The PPU's reads of the result rest on two
+console facts that no host check can show: that the RSX writes the backend
+label only after the transfer, and that the `dcbf` passes leave no stale
+line. The first console round must compare a copy with a read through the
+mapping (PS3 Health's self-check does). In the preview the copy is a
+`memcpy` out of the arena, with the same checks.
 
 ## The runtime pin
 
@@ -537,7 +600,9 @@ against the installed copy.
   `cc -std=c99 -Wall -Wextra -I tools/preview/stub -I source test/test_fs.c source/fs_line.c source/fs.c test/lv2fs_stub.c`.
 - `test/test_gfx.c`: gfx's front end (`source/gfx/gfx.c`) on a back end that
   records the draws, with an area of 409 vertices (the batching, the bounds of
-  `gfx_prim`, the drains, the blocks, the viewport, the frame, the submit and the wait): `cc -std=c99 -Wall -Wextra -DGFX_VTX_BYTES=8192 -I tools/preview/stub -I source/gfx test/test_gfx.c source/gfx/gfx.c`.
+  `gfx_prim`, the drains, the blocks, the viewport, the frame, the submit and the wait, the copy's argument
+  rules, `GFX_COPY_EFRAME`, the wait before a copy, and a job's request: taken back after 10,000 naps, run
+  in the next `gfx_wait` between frames, one at a time): `cc -std=c99 -Wall -Wextra -DGFX_VTX_BYTES=8192 -I tools/preview/stub -I source/gfx test/test_gfx.c source/gfx/gfx.c`.
 - `test/test_spu_kit.c`: the SPU kit's contract (the report's size, alignment
   and layout, the arg2 packing) and its local-store kernel over a buffer of
   the SPU's area size, 16 passes: a clean area gives no error, and injected
@@ -561,7 +626,8 @@ against the installed copy.
 - `tools/preview/kitcheck/` (CI): an app for the host only that calls the kit
   on the preview and checks the results against the rules of the headers:
   text_wrap_lines against text_wrap (5,250 cases), the va_list calls against the variadic ones (also past the
-  319-byte cut), the preview's offline socket calls, gfx_tex_new's rows, num_field's width, the gfx_block index and address, pad_repeat's frames
+  319-byte cut), the preview's offline socket calls, gfx_tex_new's rows, num_field's width, the gfx_block index and address,
+  gfx_copy_to_main on the preview (a texture's bytes, the range and alignment refusals), pad_repeat's frames
   with a held DOWN, ui_shot against the preview's own snapshot of the frame (CI compares the two files),
   ui_stats on the preview's clock, and after text_utf8: ASCII measures and draws as before, the fallbacks,
   the cut sequences and the text_fit and text_wrap breaks on whole code points
@@ -601,7 +667,8 @@ against the installed copy.
   0x28000, and the two members' 128-byte alignment.
 - The RSX-word harness (outside the repository) replays recorded traces
   through `source/gfx/` on a host model of the RSX and compares the words
-  with PS3 Health 2.0.1's.
+  with PS3 Health 2.0.1's. Traces hold no copy, and `gfx_rsx.c` now uses
+  `__dcbf` (the copy's cache pass): the harness's host model needs it.
 - CI (`.github/workflows/ci.yml`): the host job runs the journal, file, gfx, SPU kit and effects tests, the kit check, the
   script and Python checks and the smoke preview on gcc with one snapshot and its texture check;
   the ppu job builds and installs the archive with the same `sdk_setup.sh`,

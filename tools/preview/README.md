@@ -81,6 +81,12 @@ every frame, and must give the same snapshots:
 
     PV_CFLAGS='-DGFX_VTX_BYTES=8192' zsh tools/preview/build.zsh APP=<app folder>
 
+`gfx_copy_to_main` and `gfx_copy_to_main_job` copy out of the arena with
+`memcpy`, after `gfx.c`'s checks and with `gfx_rsx.c`'s range rule, so an
+app's RSX test reads back through the same calls on the host; a job's
+request still waits for the main thread's next `gfx_wait`. A gfx trace has
+no line for a copy.
+
 `gfx_vram` gets the RSX memory that gfx leaves free on the console: 249 MB (the
 `gcmGetConfiguration` size) less what `gfx_rsx.c` takes first, in its order
 and alignment: the two colour buffers and the two fragment programs. So an

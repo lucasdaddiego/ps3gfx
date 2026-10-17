@@ -43,7 +43,7 @@ jobs:
           cc -std=c99 -Wall -Wextra -I tools/preview/stub -I source -o test_fs test/test_fs.c source/fs_line.c source/fs.c test/lv2fs_stub.c
           ./test_fs
 
-      - name: Host test (gfx's front end on a recording back end, an area of 409 vertices)
+      - name: Host test (gfx's front end on a recording back end, an area of 409 vertices, the copy's rules)
         run: |
           cc -std=c99 -Wall -Wextra -DGFX_VTX_BYTES=8192 -I tools/preview/stub -I source/gfx -o test_gfx test/test_gfx.c source/gfx/gfx.c
           ./test_gfx
@@ -158,7 +158,7 @@ jobs:
       - name: ppu-nm checks (the public names, no undefined symbol outside PSL1GHT and newlib)
         run: |
           ppu-nm lib/libps3gfx.a > nm.txt
-          for s in gfx_init ui_init journal_start text_utf8 digits_init icons_init tex_round; do grep -Eq " [TD] $s\$" nm.txt || { echo "no $s in the archive"; exit 1; }; done
+          for s in gfx_init gfx_copy_to_main gfx_copy_to_main_job ui_init journal_start text_utf8 digits_init icons_init tex_round; do grep -Eq " [TD] $s\$" nm.txt || { echo "no $s in the archive"; exit 1; }; done
           for s in fonts_bin latin_bin digits_bin icons_bin spu_kit_spu spu_kit_spu_size spu_fx_spu spu_fx_spu_size; do grep -Eq " R $s\$" nm.txt || { echo "no $s in the archive"; exit 1; }; done
           for m in spu_kit spu_fx; do
             ppu-objdump -h lib/libps3gfx.a | awk -v m="$m.spu.o:" '$1==m{f=1} f && $2==".rodata"{print $NF; exit}' | grep -qx '2\*\*7' || { echo "$m.spu.o: .rodata is not 128-byte aligned"; exit 1; }

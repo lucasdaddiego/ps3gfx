@@ -9,7 +9,7 @@ the context, the display buffers and the flip.
   viewport. The library's host preview (`tools/preview`) builds it too, on
   its own back end (`gfx_soft.c`).
 - `gfx_rsx.c`: the console back end: the init, the RSX memory allocator, the
-  state, the command ring, the label fence and the flip.
+  state, the command ring, the label fence, the flip and the copy.
 - `programs.zsh`: rebuilds the shader programs and checks their words.
 
 ## The frame
@@ -54,6 +54,15 @@ the context, the display buffers and the flip.
   drive report) takes 13,524 of the 49,152 vertices.
 - Every wait (the flip, a label, GET at a ring wrap) ends after about 2 s,
   with 200 us polls: a hung RSX costs time, never the app.
+- `gfx_copy_to_main` (between frames, in the drawing thread) and
+  `gfx_copy_to_main_job` (from another thread: the drawing thread runs it at
+  the end of its next `gfx_wait`) copy RSX memory into main memory through
+  the vertex area, which is free between frames: per round of up to 960 KB,
+  `dcbf` over the round, the transfer, label 255, the bounded wait, `dcbf`
+  again, a `memcpy` to the caller's memory. The flush that sends the
+  transfer also sends the wait for the last flip, which has passed, and the
+  next draw invalidates the vertex cache, as after every PUT move. The
+  library README's section "The RSX copy" has the rules and the codes.
 - gfx registers no sysutil callback and no atexit handler. The app's
   `ui_flip` calls `sysUtilCheckCallback` once per frame, so Quit Game lets a
   running job end before the app exits.
@@ -80,7 +89,7 @@ The IO area: 1 MB of main memory (`memalign`), mapped by `gcmInitBody` with a
 |---|---|---|
 | 0 | 4 KB | libgcm |
 | 4 KB | 60 KB | the command ring |
-| 64 KB | 960 KB | the vertex area: 49,152 vertices of 20 bytes |
+| 64 KB | 960 KB | the vertex area: 49,152 vertices of 20 bytes; between frames, a copy's rounds |
 
 `ctx->end` points at the last word of the ring, which is kept for the JUMP
 back to the start (`0x20000000 | offset`). When a command does not fit,
@@ -142,6 +151,14 @@ a librsx function writes, the function is named (PSL1GHT `6e565a7`,
   the same way. The label numbers have byte 0 equal to byte 2, so the swap of
   those two bytes that librsx makes for this method changes nothing.
 - Ring: the JUMP of `rsxSetJumpCommand`.
+- Copy (`rsxSetTransferData`, mode `GCM_TRANSFER_LOCAL_TO_MAIN`): on
+  subchannel 1, where libgcm's init binds NV0039, DMA_BUFFER_IN 0xfeed0000
+  (local memory) and DMA_BUFFER_OUT 0xfeed0001 (main memory), then OFFSET_IN,
+  OFFSET_OUT, PITCH_IN, PITCH_OUT, LINE_LENGTH_IN, LINE_COUNT, FORMAT 0x101
+  and BUF_NOTIFY 0. Lines of 4 KB with both pitches 4 KB, as nouveau's NV04
+  copies; a round of 960 KB is 240 lines (one method takes 2047, PSL1GHT's
+  `NV_MEM2MEM_MAX_HEIGHT_VALUE`), and a size that is not whole lines ends with
+  one shorter line. Label 255 follows, as for a frame.
 - Init: CLEAR_COLOR_VALUE, CLEAR_BUFFERS 0xf0 (colour only) and a NOP for
   each colour buffer (`rsxSetClearColor`, `rsxClearSurface`). There is no flip
   at init.

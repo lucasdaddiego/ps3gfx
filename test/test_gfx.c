@@ -1,6 +1,7 @@
 /* Host test of gfx's front end (source/gfx/gfx.c) on a back end that records
  * the draws: the batching, the vertex area and its drains, the blocks, the
- * viewport, the frame, and the submit and the wait. CI runs it with a small area of 409 vertices:
+ * viewport, the frame, the submit and the wait, and the copy's rules and its
+ * job request. CI runs it with a small area of 409 vertices:
  *   cc -std=c99 -Wall -Wextra -DGFX_VTX_BYTES=8192 -I tools/preview/stub -I source/gfx \
  *      test/test_gfx.c source/gfx/gfx.c */
 #define _POSIX_C_SOURCE 200809L
@@ -20,6 +21,10 @@ static u32 area_n;                           /* the area in vertices */
 static struct { int type; u32 first, n; const gfx_tex *t; } draws[256];
 static int nd, drains, begins, ends, waits, exits, viewports;
 static int outstanding;                      /* a submit without its wait: the back end gets nothing else */
+static int open_frame;                       /* between a begin and its submit */
+static int copies, naps, nap_mode;           /* nap_mode 1: a nap draws a frame, as the drawing thread does; 2: and asks again first */
+static int nested_rc;
+static u8 vram[4096] __attribute__((aligned(128)));   /* the RSX memory of the copies */
 static float last_vp[4];
 
 int gfx_be_init(u32 vtx_bytes, gfx_vtx **out)
@@ -36,6 +41,7 @@ void gfx_be_begin(const float *vp)
 {
     (void)vp;
     CHECK(!outstanding);
+    open_frame = 1;
     begins++;
 }
 
@@ -67,6 +73,7 @@ void gfx_be_submit(void)
 {
     CHECK(!outstanding);
     outstanding = 1;
+    open_frame = 0;
     ends++;
 }
 
@@ -81,9 +88,33 @@ void gfx_be_exit(void)
     CHECK(!outstanding);
     exits++;
 }
+/* A copy runs between frames only: no frame open, none waiting. */
+int gfx_be_copy(const void *src, void *dst, u32 bytes)
+{
+    const u8 *s = src;
+    CHECK(!outstanding && !open_frame);
+    copies++;
+    if (s < vram || bytes > sizeof vram || (size_t)(s - vram) > sizeof vram - bytes) return GFX_COPY_ERANGE;
+    memcpy(dst, s, bytes);
+    return 0;
+}
+
+static u8 job_dst[256];
+
+void gfx_be_nap(void)
+{
+    naps++;
+    if (nap_mode == 2) nested_rc = gfx_copy_to_main_job(vram, job_dst, 128);   /* the first request still waits */
+    if (nap_mode) {
+        gfx_begin();
+        gfx_prim(GFX_QUADS, 4);
+        gfx_end();
+    }
+}
+
 void *gfx_vram(u32 size, u32 align, u32 *offset) { (void)size; (void)align; (void)offset; return NULL; }
 
-static void reset(void) { nd = drains = begins = ends = waits = exits = viewports = 0; }
+static void reset(void) { nd = drains = begins = ends = waits = exits = viewports = copies = naps = 0; }
 
 static int draw_is(int i, int type, u32 first, u32 n, const gfx_tex *t)
 {
@@ -291,6 +322,59 @@ static void submit(void)
     CHECK(ends == 1 && waits == 1 && exits == 1);
 }
 
+/* The copy: src and bytes multiples of 128, bytes 1 to GFX_COPY_MAX, src in
+ * RSX memory (the back end's rule). gfx_copy_to_main runs outside a frame,
+ * after the wait of a submitted frame. */
+static void copy(void)
+{
+    static u8 dst[512];
+    for (unsigned i = 0; i < sizeof vram; i++) vram[i] = (u8)(i * 7 + 1);
+    reset();
+    CHECK(gfx_copy_to_main(vram, dst, 0) == GFX_COPY_EARG);
+    CHECK(gfx_copy_to_main(vram + 64, dst, 128) == GFX_COPY_EARG);
+    CHECK(gfx_copy_to_main(vram, dst, 100) == GFX_COPY_EARG);
+    CHECK(gfx_copy_to_main(vram, dst, GFX_COPY_MAX + 128) == GFX_COPY_EARG);
+    CHECK(gfx_copy_to_main_job(vram + 4, dst, 128) == GFX_COPY_EARG);
+    CHECK(copies == 0);
+    CHECK(gfx_copy_to_main(vram + sizeof vram - 128, dst, 256) == GFX_COPY_ERANGE);
+    memset(dst, 0, sizeof dst);
+    CHECK(gfx_copy_to_main(vram + 256, dst + 1, 384) == 0);   /* dst has no rule */
+    CHECK(!memcmp(dst + 1, vram + 256, 384) && dst[0] == 0 && dst[385] == 0);
+    gfx_begin();
+    CHECK(gfx_copy_to_main(vram, dst, 128) == GFX_COPY_EFRAME);
+    gfx_prim(GFX_QUADS, 4);
+    gfx_submit();
+    CHECK(waits == 0);
+    CHECK(gfx_copy_to_main(vram, dst, 128) == 0 && waits == 1);
+    CHECK(copies == 3 && ends == 1);
+}
+
+/* gfx_copy_to_main_job: the request runs at the drawing thread's next
+ * gfx_wait, between frames; one at a time; taken back when no frame ends
+ * in 10,000 naps (about 2 s). */
+static void copy_job(void)
+{
+    reset();
+    nap_mode = 0;
+    CHECK(gfx_copy_to_main_job(vram, job_dst, 128) == GFX_COPY_ENOFRAME);
+    CHECK(naps == 10000 && copies == 0);
+    reset();
+    nap_mode = 1;
+    memset(job_dst, 0, sizeof job_dst);
+    CHECK(gfx_copy_to_main_job(vram + 128, job_dst, 256) == 0);
+    CHECK(naps == 1 && copies == 1 && begins == 1 && ends == 1 && waits == 1);
+    CHECK(!memcmp(job_dst, vram + 128, 256));
+    reset();
+    nap_mode = 2;
+    nested_rc = 0;
+    CHECK(gfx_copy_to_main_job(vram + sizeof vram, job_dst, 128) == GFX_COPY_ERANGE);   /* the back end's code comes back */
+    CHECK(nested_rc == GFX_COPY_EBUSY && naps == 1 && copies == 1);
+    reset();
+    nap_mode = 1;
+    CHECK(gfx_copy_to_main_job(vram, job_dst, 128) == 0 && copies == 1);   /* the slot is free again */
+    nap_mode = 0;
+}
+
 int main(void)
 {
     if (gfx_init() != 0) {
@@ -303,6 +387,8 @@ int main(void)
     block();
     viewport();
     submit();
+    copy();
+    copy_job();
     frames();
     if (fails) {
         printf("%d checks failed\n", fails);

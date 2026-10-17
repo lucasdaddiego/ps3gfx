@@ -1,6 +1,7 @@
 /* The portable front end of gfx: the vertex area, the batching and the
  * viewport. The console (gfx_rsx.c) and the host preview build this file. */
 #include <stddef.h>
+#include <stdint.h>
 #include "gfx.h"
 
 #ifndef GFX_VTX_BYTES
@@ -17,6 +18,7 @@ static int in_frame;
 static int pending;                          /* a submitted frame gfx_wait has not waited for */
 static u32 n_vtx, n_draws, n_drains;         /* this frame's counts */
 static u32 last_vtx, last_draws, last_drains;    /* the last frame's, at its gfx_end */
+static void copy_serve(void);
 
 /* The draw that the next primitives can still join. */
 static struct {
@@ -152,6 +154,7 @@ void gfx_wait(void)
     if (!pending) return;
     pending = 0;
     gfx_be_wait();
+    copy_serve();
 }
 
 void gfx_end(void)
@@ -173,4 +176,64 @@ void gfx_exit(void)
 {
     gfx_end();
     gfx_be_exit();
+}
+
+/* ---- the copy --------------------------------------------------------------- */
+
+/* A job's copy request, from gfx_copy_to_main_job to the drawing thread's
+ * next gfx_wait: 0 none, 1 being written, 2 posted, 3 taken, 4 done. */
+static volatile int creq;
+static const void *creq_src;
+static void *creq_dst;
+static u32 creq_bytes;
+static volatile int creq_rc;
+#define JOB_POLLS 10000                      /* naps of 200 us: about 2 s */
+
+static int copy_args(const void *src, u32 bytes)
+{
+    if (!bytes || bytes > GFX_COPY_MAX || (((uintptr_t)src | bytes) & 127)) return GFX_COPY_EARG;
+    return 0;
+}
+
+/* In the drawing thread, between frames: the vertex area is free. */
+static void copy_serve(void)
+{
+    if (creq != 2 || !__sync_bool_compare_and_swap(&creq, 2, 3)) return;
+    creq_rc = gfx_be_copy(creq_src, creq_dst, creq_bytes);
+    __sync_synchronize();
+    creq = 4;
+}
+
+int gfx_copy_to_main(const void *src, void *dst, u32 bytes)
+{
+    int rc = copy_args(src, bytes);
+    if (rc) return rc;
+    if (in_frame) return GFX_COPY_EFRAME;
+    gfx_wait();
+    return gfx_be_copy(src, dst, bytes);
+}
+
+/* A request that no frame took in about 2 s is taken back (ENOFRAME). A
+ * taken one is waited for: each round of the drawing thread ends within
+ * about 2 s. After 8 s more the call gives up (ETIME): the request stays
+ * taken, so later calls get EBUSY, and dst may still be written. */
+int gfx_copy_to_main_job(const void *src, void *dst, u32 bytes)
+{
+    int rc = copy_args(src, bytes);
+    if (rc) return rc;
+    if (!__sync_bool_compare_and_swap(&creq, 0, 1)) return GFX_COPY_EBUSY;
+    creq_src = src;
+    creq_dst = dst;
+    creq_bytes = bytes;
+    __sync_synchronize();
+    creq = 2;
+    for (int i = 0; creq != 4; i++) {
+        if (i >= JOB_POLLS && __sync_bool_compare_and_swap(&creq, 2, 0)) return GFX_COPY_ENOFRAME;
+        if (i >= 5 * JOB_POLLS) return GFX_COPY_ETIME;
+        gfx_be_nap();
+    }
+    __sync_synchronize();
+    rc = creq_rc;
+    creq = 0;
+    return rc;
 }

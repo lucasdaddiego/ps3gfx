@@ -92,6 +92,34 @@ const volatile u32 *gfx_front(u32 *pitch);
  * the draws and the drains; a NULL pointer is skipped. */
 void gfx_last_counts(u32 *vertices, u32 *draws, u32 *drains);
 
+/* A copy of RSX memory into main memory by the RSX's own DMA (NV0039,
+ * memory to memory): bytes from src, an address that gfx_vram or
+ * gfx_tex_new gave (RSX local memory), to dst, any main memory. src and bytes are multiples of
+ * 128, bytes at most GFX_COPY_MAX; dst has no rule. The RSX copies into the
+ * vertex area, which is free between frames, at most 960 KB a round; the
+ * PPU waits for a label after each round (at most about 2 s), then copies
+ * the round to dst. 0, or a GFX_COPY_E* code: no wait is without a bound.
+ * Where:
+ *   gfx_copy_to_main: the drawing thread (the one that calls gfx_begin and
+ *     gfx_end), outside a frame; it waits for a submitted frame first.
+ *   gfx_copy_to_main_job: another thread (a run_job job) while the drawing
+ *     thread draws frames. The copy runs in the drawing thread at the end of
+ *     its next gfx_wait, and the call returns when it has: one request at a
+ *     time. Never from the drawing thread: it would wait for itself.
+ * After GFX_COPY_ETIME the RSX may still write the vertex area, and a job's
+ * dst may still be written by the drawing thread: keep dst allocated. Every
+ * later copy then fails at once (GFX_COPY_ETIME, or GFX_COPY_EBUSY for a
+ * job). The preview copies with memcpy, with the same rules. */
+#define GFX_COPY_MAX      (16u << 20)
+#define GFX_COPY_EARG     -1                 /* src or bytes not a multiple of 128, bytes 0 or over GFX_COPY_MAX */
+#define GFX_COPY_ERANGE   -2                 /* src to src + bytes is not in RSX local memory */
+#define GFX_COPY_EFRAME   -3                 /* gfx_copy_to_main inside a frame */
+#define GFX_COPY_EBUSY    -4                 /* gfx_copy_to_main_job: another request waits */
+#define GFX_COPY_ENOFRAME -5                 /* gfx_copy_to_main_job: no frame ended in about 2 s to take it */
+#define GFX_COPY_ETIME    -6                 /* the RSX did not finish a round in about 2 s */
+int gfx_copy_to_main(const void *src, void *dst, u32 bytes);
+int gfx_copy_to_main_job(const void *src, void *dst, u32 bytes);
+
 /* One vertex, and a pointer to the next. Each field is its own 4-byte store:
  * GCC 7.2 can merge plain stores into 8-byte ones, which RSX memory may not
  * take if the vertices ever move there. */
@@ -110,7 +138,9 @@ static inline gfx_vtx *gfx_put(gfx_vtx *p, float x, float y, u32 rgba, float u, 
  * of the area from index first, t NULL for colour only. drain returns when
  * the RSX has read every vertex drawn so far. submit queues the end of the
  * frame (its label, the flip and the wait for it) and returns; wait returns
- * when the flip is done and the RSX has passed the label. */
+ * when the flip is done and the RSX has passed the label. copy is a
+ * gfx_copy_to_main between frames, its arguments checked by gfx.c: 0 or a
+ * GFX_COPY_E* code. nap is one poll's sleep of a job's request (200 us). */
 int gfx_be_init(u32 vtx_bytes, gfx_vtx **area);
 void gfx_be_begin(const float *vp);
 void gfx_be_viewport(const float *vp);
@@ -119,5 +149,7 @@ void gfx_be_drain(void);
 void gfx_be_submit(void);
 void gfx_be_wait(void);
 void gfx_be_exit(void);
+int gfx_be_copy(const void *src, void *dst, u32 bytes);
+void gfx_be_nap(void);
 
 #endif

@@ -7,10 +7,12 @@
  *     RSX reads the vertices only after gfx moves PUT. raster.c then draws
  *     them, and the vertices they used become NaN: a draw that reads a vertex
  *     from before the last drain draws nothing, and the snapshot shows it.
+ *   - gfx_copy_to_main is a memcpy out of the arena.
  * PV_STAT=1 prints the vertices, draws and drains per frame at exit. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include "gfx.h"
 #include "raster.h"
 #include "pv.h"
@@ -159,6 +161,17 @@ void gfx_be_submit(void)
 void gfx_be_wait(void) {}
 
 void gfx_be_exit(void) {}                            /* gfx_be_submit left nothing to draw */
+
+/* gfx_copy_to_main: a memcpy out of the arena, with gfx_rsx.c's range rule. */
+int gfx_be_copy(const void *src, void *dst, u32 bytes)
+{
+    const u8 *s = src;
+    if (!arena || s < arena || bytes > LOCAL_SIZE || (u64)(s - arena) > LOCAL_SIZE - bytes) return GFX_COPY_ERANGE;
+    memcpy(dst, s, bytes);
+    return 0;
+}
+
+void gfx_be_nap(void) { usleep(200); }
 
 /* The raster's buffer: it holds the last frame that a snapshot rasterized. */
 const volatile u32 *gfx_front(u32 *pitch)

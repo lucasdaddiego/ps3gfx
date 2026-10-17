@@ -8,6 +8,7 @@
  * It prints each failed check and exits 1, or prints "kitcheck: all checks
  * passed" and exits 0 after frame 100. Frame 50's ui_shot, shot.ppm in the
  * app folder, must equal the snapshot kit.ppm byte for byte (CI: cmp).
+ * Before them, gfx_copy_to_main between frames (a memcpy here).
  * After the pad's frames: the display digits, the icons and fx.h, checked
  * on the vertices each call writes (the frame's vertex area is contiguous:
  * a mark before and after a call holds them), and the RSX memory that
@@ -116,6 +117,24 @@ static void block(void)
     CHECK(b == area + 32 && ((uintptr_t)b & 127) == 0);
     for (int i = 0; i < 400; i++) gfx_put(b + i, 0, 0, 0, 0, 0);
     ui_flip();
+}
+
+/* gfx_copy_to_main between frames on the preview: a texture's bytes come
+ * back whole; a src outside RSX memory and a src off a 128-byte line are
+ * refused */
+static void copies(void)
+{
+    static u8 host[128] __attribute__((aligned(128)));       /* main memory */
+    gfx_tex t;
+    u8 *p = gfx_tex_new(&t, 64, 8, GFX_TEX_A8R8G8B8, 0), *dst = malloc(2048 + 1);
+    CHECK(p && dst);
+    if (!p || !dst) { free(dst); return; }
+    for (int i = 0; i < 2048; i++) p[i] = (u8)(i * 13 + 5);
+    memset(dst, 0, 2049);
+    CHECK(gfx_copy_to_main(p, dst + 1, 2048) == 0 && !memcmp(dst + 1, p, 2048) && dst[0] == 0);
+    CHECK(gfx_copy_to_main(host, dst, 128) == GFX_COPY_ERANGE);
+    CHECK(gfx_copy_to_main(p + 4, dst, 128) == GFX_COPY_EARG);
+    free(dst);
 }
 
 /* UTF-8 after text_utf8: ASCII measures and draws as before, the fallbacks
@@ -575,6 +594,7 @@ int main(void)
     textures();
     fields();
     block();
+    copies();
 
     /* pad_repeat: the press, then 350 ms, then every 30 ms; groups apart; a new press after a release */
     pad_rep down = {0}, side = {0};

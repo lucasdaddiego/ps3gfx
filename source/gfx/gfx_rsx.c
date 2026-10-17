@@ -333,6 +333,75 @@ void gfx_be_exit(void)
     ctx->current = wp;
 }
 
+/* ---- the copy --------------------------------------------------------------- */
+
+/* gfx_copy_to_main between frames: the RSX copies each round of RSX memory
+ * into the vertex area, the main memory of the IO area that no frame uses
+ * now, and the PPU copies it on. NV0039 is on subchannel 1, as libgcm's init
+ * binds it (PSL1GHT's rsxSetTransferData): DMA_BUFFER_IN and OUT, then
+ * OFFSET_IN to BUF_NOTIFY. A line is 4 KB, as nouveau's copies, and a round
+ * of 960 KB is 240 lines, under the 2047 of one method. The label after the
+ * transfer is written when the RSX has done it. */
+#define STAGE_AT    VTX_AT
+#define STAGE_BYTES (IO_BYTES - VTX_AT)
+#define LINE        4096
+static int copy_hung;                        /* a round timed out: the RSX may still write the area */
+
+/* Each line of the round out of the PPU's cache: dirty vertices go to
+ * memory before the transfer, and no stale line stays after it. */
+static void flush_lines(u8 *p, u32 n)
+{
+    for (u32 k = 0; k < n; k += 128) __dcbf(p + k);
+    __sync();
+}
+
+static void transfer(u32 src, u32 dst, u32 len, u32 lines)
+{
+    wp[0] = 8 << 18 | 1 << 13 | 0x030c;      /* NV0039 OFFSET_IN */
+    wp[1] = src;
+    wp[2] = dst;                             /* OFFSET_OUT */
+    wp[3] = len;                             /* PITCH_IN */
+    wp[4] = len;                             /* PITCH_OUT */
+    wp[5] = len;                             /* LINE_LENGTH_IN */
+    wp[6] = lines;                           /* LINE_COUNT */
+    wp[7] = 0x101;                           /* FORMAT: 1 byte in, 1 byte out */
+    wp[8] = 0;                               /* BUF_NOTIFY */
+    wp += 9;
+}
+
+int gfx_be_copy(const void *src, void *dst, u32 bytes)
+{
+    const u8 *s = src;
+    u32 off;
+    if (copy_hung) return GFX_COPY_ETIME;
+    if (!ready || s < vram_base || bytes > vram_size || (u64)(s - vram_base) > vram_size - bytes) return GFX_COPY_ERANGE;
+    if (gcmAddressToOffset(s, &off)) return GFX_COPY_ERANGE;
+    for (u32 done = 0; done < bytes;) {
+        u32 n = bytes - done > STAGE_BYTES ? STAGE_BYTES : bytes - done, lines = n / LINE, tail = n % LINE;
+        flush_lines(io + STAGE_AT, n);
+        need(21);
+        wp[0] = 2 << 18 | 1 << 13 | 0x0184;  /* NV0039 DMA_BUFFER_IN, DMA_BUFFER_OUT */
+        wp[1] = 0xfeed0000;                  /* from local memory */
+        wp[2] = 0xfeed0001;                  /* to main memory */
+        wp += 3;
+        if (lines) transfer(off + done, io_off + STAGE_AT, LINE, lines);
+        if (tail) transfer(off + done + lines * LINE, io_off + STAGE_AT + lines * LINE, tail, 1);
+        u32 v = mark();
+        flush();
+        wait_for(label, v);
+        if (*label != v) {
+            copy_hung = 1;
+            return GFX_COPY_ETIME;
+        }
+        flush_lines(io + STAGE_AT, n);
+        memcpy((u8 *)dst + done, io + STAGE_AT, n);
+        done += n;
+    }
+    return 0;
+}
+
+void gfx_be_nap(void) { usleep(200); }
+
 /* ---- init ------------------------------------------------------------------- */
 
 /* 0, or the number of the step that failed: with no picture, the app writes
