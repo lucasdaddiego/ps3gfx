@@ -212,8 +212,15 @@ vertex's bits: ASCII text after `text_utf8` takes the byte paths, a plain
 `"%s"` skips `vsnprintf`, the fans and strips take no division per vertex,
 `digits` and `icon` round with float adds, not `floorf`, and the effects
 program's three-trip loops are unrolled by hand (`data/spu_fx.spu` changes).
-The next console round checks `ui_shot`'s bytes (the copy) and Couch's sky
-and aurora on the new program.
+The console round of 2026-10-17 (PS3 Health 2.2.1 and Couch 0.5.1, through
+webMAN's virtual pad and a camera on the TV): Couch's unattended screenshots
+by `ui_shot` came through the copy whole and right (a frame of 284 and 363
+ms with the 6 MB write; the reads through the mapping took about 1.4 s),
+Health's RSX test read 231 MB back by `gfx_copy_to_main_job` with no error,
+SQUARE then RIGHT cancelled Health's journal clear, and the sky took 1.73 ms
+a picture on the slowest SPU (0.5.0 on the old program: 2.23 ms). Not yet:
+Cell Bench's kit check, which compares `ui_shot`'s bytes, and the aurora on
+the new program.
 
 ## The RSX copy
 
@@ -596,7 +603,9 @@ the clouds' row loop), and none in the pixel loops. Until 2026-10-17 the
 three-trip loops (the colour channels, the glass mix, the curtains) stayed
 loops: spu-gcc 7.2 does not unroll them at -O2 and has no `#pragma GCC
 unroll`, so each one reloaded its constants and missed its exit branch once a
-quad. No console has run the unrolled program yet. On the host (Apple M4, one thread, the
+quad. On the console (Couch 0.5.1, 2026-10-17) the unrolled sky takes 1.73 ms
+a picture on the slowest SPU, 1.84 to 1.87 ms at most (Couch 0.5.0 on the
+rolled program: 2.23 ms, 2.37 ms at most), about 22 % less. On the host (Apple M4, one thread, the
 plain lanes): a sky picture 3.2 ms (three octaves: 2.9 ms), an aurora
 picture 2.0 ms, a rain job 0.007 ms.
 
