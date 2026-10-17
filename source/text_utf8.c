@@ -6,6 +6,7 @@
 #include "gfx.h"
 #include "ui.h"
 #include "ui_text.h"
+#include "ui_kit.h"
 #include "latin_bin.h"
 
 static ui_atlas atlas[F_COUNT];
@@ -85,8 +86,9 @@ static int load(void)
         p = align4(p + npx / 2);
     }
     ncp = count;
+    square = -1;                             /* map's answer for a code point it lacks: a latin.bin without U+25A1 fails */
     square = map(0x25a1);
-    if (square < 0 || square >= count) return -1;
+    if (square < 0) return -1;
     ui_text_latin(atlas, map);
     return 0;
 }

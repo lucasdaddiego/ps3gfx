@@ -13,10 +13,6 @@ typedef struct {
     gfx_tex tex;
 } ui_atlas;
 
-/* The two A4R4G4B4 texels of each byte of 4-bit alphas, as one 32-bit word in
- * memory order (ui.c fills it in fonts_init). */
-const u32 *ui_texel_pairs(void);
-
 /* From text_utf8(): the five Latin atlases, and map, which gives a code point
  * from U+0080 its slot in them (0 and up), 0x100 + an ASCII character to draw
  * instead, or -1 for no glyph and no width. */

@@ -2,9 +2,10 @@
  * and the glyph quads. icons.bin is an archive member that only this file
  * references, so an app links both only when it calls icons_init. */
 #include <math.h>
-#include <string.h>
+#include <stddef.h>
 #include "gfx.h"
 #include "icons.h"
+#include "ui_kit.h"
 #include "icons_bin.h"
 
 #define IC_SETS 3
@@ -27,20 +28,9 @@ static int done;                             /* 1 after icons_init, -1 after one
 
 static unsigned rd16(const u8 *p) { return (unsigned)p[0] << 8 | p[1]; }
 
-/* floorf in float adds, as digits.c's floor_px (-mcpu=cell has no frim):
- * the console's floorf for every float, the host's for every x + 0.5f. */
-static inline float floor_px(float x)
-{
-    const float big = 8388608.0f;
-    if (!(fabsf(x) < big)) return x;
-    float r = x < 0 ? x - big + big : x + big - big;
-    return r > x ? r - 1 : r;
-}
-
 int icons_init(void)
 {
     const u8 *p = icons_bin, *end = icons_bin + icons_bin_size;
-    u32 pair[256];
     if (done) return done > 0 ? 0 : -1;
     done = -1;                               /* until the end: gfx_vram gives no memory back, so a retry would take more */
     if (icons_bin_size < 12 || p[0] != 'P' || p[1] != 'H' || p[2] != 'I' || p[3] != '1') return -1;
@@ -49,13 +39,9 @@ int icons_init(void)
     if (end - p < 16 * IC_COUNT) return -1;
     const u8 *table = p;
     p += 16 * IC_COUNT;
-    /* A byte of 4-bit alphas as its two A4R4G4B4 texels in memory order, white
-     * also at alpha 0: the L set's bilinear samples mix no black into the
-     * edges (a grey fringe on a bright sky). */
-    for (int b = 0; b < 256; b++) {
-        u16 t[2] = {(u16)((b >> 4) << 12 | 0x0fff), (u16)((b & 15) << 12 | 0x0fff)};
-        memcpy(&pair[b], t, 4);
-    }
+    /* ui.c's texel pairs, white also at alpha 0: the L set's bilinear samples
+     * mix no black into the edges (a grey fringe on a bright sky). */
+    const u32 *pair = ui_texel_pairs();
     int aw[IC_SETS], ah[IC_SETS];
     for (int k = 0; k < IC_SETS; k++) {
         if (end - p < 8) return -1;
@@ -114,11 +100,28 @@ void icon(int id, float cx, float cy, u32 rgba)
     gfx_texture(NULL);
 }
 
+/* cosf and sinf took about 0.37 us each on the console. Angle 0 needs
+ * neither: cosf(+-0) is 1 and sinf(+-0) is +-0, so c = scale and s = angle *
+ * scale have their bits. The last angle other than 0 keeps its cosf and
+ * sinf: the two layers of a duotone icon turn by the same angle. */
 void icon_rot(int id, float cx, float cy, float angle, float scale, u32 rgba)
 {
+    static float last_a, last_c, last_s;     /* last_a 0: none yet (an angle of 0 takes the first branch) */
     if (done <= 0 || id < 0 || id >= IC_COUNT) return;
     const iglyph *g = &glyphs[id];
-    float c = cosf(angle) * scale, s = sinf(angle) * scale;
+    float c, s;
+    if (angle == 0) {
+        c = scale;
+        s = angle * scale;
+    } else {
+        if (angle != last_a) {
+            last_a = angle;
+            last_c = cosf(angle);
+            last_s = sinf(angle);
+        }
+        c = last_c * scale;
+        s = last_s * scale;
+    }
     float dx[4] = {-g->cx, g->w - g->cx, g->w - g->cx, -g->cx}, dy[4] = {-g->cy, -g->cy, g->h - g->cy, g->h - g->cy};
     float u[4] = {g->u0, g->u1, g->u1, g->u0}, v[4] = {g->v0, g->v0, g->v1, g->v1};
     gfx_texture(&sets[g->set].lin);

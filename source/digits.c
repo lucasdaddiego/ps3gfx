@@ -2,10 +2,10 @@
  * --digits) into RSX memory, and the glyph quads. digits.bin is an archive
  * member that only this file references, so an app links both only when it
  * calls digits_init. */
-#include <math.h>
-#include <string.h>
+#include <stddef.h>
 #include "gfx.h"
 #include "digits.h"
+#include "ui_kit.h"
 #include "digits_bin.h"
 
 #define DG_MAX 32                            /* glyphs of an atlas */
@@ -25,34 +25,9 @@ static int done;                             /* 1 after digits_init, -1 after on
 static unsigned rd16(const u8 *p) { return (unsigned)p[0] << 8 | p[1]; }
 static const u8 *align4(const u8 *p) { return p + (4 - (p - digits_bin) % 4) % 4; }
 
-/* floorf in float adds: -mcpu=cell has no frim, so floorf is a library call.
- * Under 2^23, adding and taking away 2^23 rounds to a whole number, then one
- * down if that went up; from 2^23 a float is whole, and NaN passes. It gives
- * the console's floorf for every float (also +0 for -0), and the host's for
- * every x + 0.5f (never -0 or a signalling NaN). */
-static inline float floor_px(float x)
-{
-    const float big = 8388608.0f;
-    if (!(fabsf(x) < big)) return x;
-    float r = x < 0 ? x - big + big : x + big - big;
-    return r > x ? r - 1 : r;
-}
-
-/* A byte of 4-bit alphas as its two A4R4G4B4 texels in memory order, white
- * also at alpha 0: a bilinear sample (at 720p and 480p) then mixes no black
- * into the edges. */
-static void pairs(u32 *pair)
-{
-    for (int b = 0; b < 256; b++) {
-        u16 t[2] = {(u16)((b >> 4) << 12 | 0x0fff), (u16)((b & 15) << 12 | 0x0fff)};
-        memcpy(&pair[b], t, 4);
-    }
-}
-
 int digits_init(void)
 {
     const u8 *p = digits_bin, *end = digits_bin + digits_bin_size;
-    u32 pair[256];
     if (done) return done > 0 ? 0 : -1;
     done = -1;                               /* until the end: gfx_vram gives no memory back, so a retry would take more */
     if (digits_bin_size < 12 || p[0] != 'P' || p[1] != 'H' || p[2] != 'D' || p[3] != '1') return -1;
@@ -62,11 +37,13 @@ int digits_init(void)
     if (end - p < 2 * count) return -1;
     for (int i = 0; i < count; i++) {
         unsigned cp = rd16(p + 2 * i);
-        if (cp > 255) return -1;
+        if (cp > 255 || cp == 0xc2) return -1;   /* C2: the UTF-8 lead byte of the degree sign draws nothing */
         slot[cp] = (u8)(i + 1);
     }
     p = align4(p + 2 * count);
-    pairs(pair);
+    /* ui.c's texel pairs, white also at alpha 0: a bilinear sample (at 720p
+     * and 480p) then mixes no black into the edges. */
+    const u32 *pair = ui_texel_pairs();
     u16 linear = !(gfx_w == 1920 && gfx_h == 1080);   /* as the fonts: nearest at 1080p */
     for (int k = 0; k < D_COUNT; k++) {
         dfont *f = &dfonts[k];
@@ -107,14 +84,9 @@ int digits_init(void)
     return 0;
 }
 
-/* The glyph at s[i], -1 for none; the UTF-8 lead byte of the degree sign is
- * no glyph (its B0 follows). */
-static int glyph_at(const char *s, int i)
-{
-    unsigned c = (unsigned char)s[i];
-    if (c == 0xc2 && (unsigned char)s[i + 1] == 0xb0) return -1;
-    return (int)slot[c] - 1;
-}
+/* The glyph of a byte, -1 for none. The UTF-8 lead byte of the degree sign,
+ * C2, has no slot (digits_init refuses one), so C2 B0 draws B0's glyph. */
+static int glyph_at(unsigned char c) { return (int)slot[c] - 1; }
 
 static int ok(int size) { return done > 0 && size >= 0 && size < D_COUNT; }
 
@@ -123,7 +95,7 @@ int digits_w(int size, const char *s)
     int w = 0;
     if (!ok(size)) return 0;
     for (int i = 0; s[i]; i++) {
-        int k = glyph_at(s, i);
+        int k = glyph_at(s[i]);
         if (k >= 0) w += (int)dfonts[size].g[k].adv;
     }
     return w;
@@ -139,17 +111,20 @@ float digits(float x, float y, int size, u32 rgba, const char *s)
     const dfont *f = &dfonts[size];
     float px = floor_px(x + 0.5f), top = floor_px(y + 0.5f) + f->asc - f->base;
     float pad = f->pad, cw = f->cw, y1 = top + f->ch;
+    int left = 0, room = 0;
+    gfx_vtx *q = NULL;
+    for (int i = 0; s[i]; i++) left += glyph_at(s[i]) >= 0;   /* the quads, for quad_next */
     gfx_texture(&f->tex);
     for (int i = 0; s[i]; i++) {
-        int k = glyph_at(s, i);
+        int k = glyph_at(s[i]);
         if (k < 0) continue;
         const dglyph *g = &f->g[k];
         float x0 = px - pad, x1 = x0 + cw;
-        gfx_vtx *q = gfx_prim(GFX_QUADS, 4);
+        q = quad_next(q, &room, &left);
         q = gfx_put(q, x0, top, rgba, g->u0, g->v0);
         q = gfx_put(q, x1, top, rgba, g->u1, g->v0);
         q = gfx_put(q, x1, y1, rgba, g->u1, g->v1);
-        gfx_put(q, x0, y1, rgba, g->u0, g->v1);
+        q = gfx_put(q, x0, y1, rgba, g->u0, g->v1);
         px += g->adv;
     }
     gfx_texture(NULL);

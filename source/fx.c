@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include "gfx.h"
 #include "ui.h"
+#include "ui_kit.h"
 #include "fx.h"
 
 #define PI_F 3.14159265f
@@ -22,31 +23,17 @@ void tex_sub(const gfx_tex *t, float x, float y, float w, float h, float u0, flo
     gfx_texture(NULL);
 }
 
-/* The corner points of round_rect (ui.c's round_pts: seg 4 below a radius
- * of 8, else 8), made at the first call with ui.c's angle expressions. Each
- * angle goes through a volatile, as in ui.c, so a compiler cannot fold a
- * cosf of a constant with other rounding than the library's. */
-static float rc[2][36], rs[2][36];
-static int corners_made;
-
-static void corners(void)
+/* One point of tex_round's outline, its texture coordinate from its place
+ * in the rect. */
+static inline gfx_vtx *round_vtx(gfx_vtx *q, float px, float py, float x, float y, float u0, float v0, float su,
+                                 float sv, u32 tint)
 {
-    volatile float va;
-    float b;
-    for (int t = 0; t < 2; t++) {
-        int seg = t ? 8 : 4, n = 0;
-        for (int k = 0; k < 4; k++)
-            for (int i = 0; i <= seg; i++) {
-                float a = PI_F * (1 + k * 0.5f) + PI_F / 2 * i / seg;
-                va = a;
-                b = va;
-                rc[t][n] = cosf(b);
-                rs[t][n++] = sinf(b);
-            }
-    }
-    corners_made = 1;
+    return gfx_put(q, px, py, tint, u0 + (px - x) * su, v0 + (py - y) * sv);
 }
 
+/* The outline of round_rect: ui.c's corner points (round_pts' tables, seg 4
+ * below a radius of 8, else 8), walked corner by corner as round_pts does,
+ * then the first point again to close the fan: no division per vertex. */
 void tex_round(const gfx_tex *t, float x, float y, float w, float h, float r, float u0, float v0, float u1, float v1,
                u32 tint)
 {
@@ -56,19 +43,18 @@ void tex_round(const gfx_tex *t, float x, float y, float w, float h, float r, fl
         tex_sub(t, x, y, w, h, u0, v0, u1, v1, tint);
         return;
     }
-    if (!corners_made) corners();
     int seg = r < 8 ? 4 : 8, n = 4 * (seg + 1);
-    const float *c = rc[seg == 8], *s = rs[seg == 8];
+    const float *c, *s;
+    ui_round_unit(seg, &c, &s);
     const float cx[4] = {x + r, x + w - r, x + w - r, x + r}, cy[4] = {y + r, y + r, y + h - r, y + h - r};
     float su = (u1 - u0) / w, sv = (v1 - v0) / h;
     gfx_texture(t);
     gfx_vtx *q = gfx_prim(GFX_TRIANGLE_FAN, n + 2);
     q = gfx_put(q, x + w / 2, y + h / 2, tint, (u0 + u1) / 2, (v0 + v1) / 2);
-    for (int j = 0; j <= n; j++) {
-        int i = j % n, k = i / (seg + 1);
-        float px = cx[k] + c[i] * r, py = cy[k] + s[i] * r;
-        q = gfx_put(q, px, py, tint, u0 + (px - x) * su, v0 + (py - y) * sv);
-    }
+    for (int k = 0, j = 0; k < 4; k++)
+        for (int i = 0; i <= seg; i++, j++)
+            q = round_vtx(q, cx[k] + c[j] * r, cy[k] + s[j] * r, x, y, u0, v0, su, sv, tint);
+    round_vtx(q, cx[0] + c[0] * r, cy[0] + s[0] * r, x, y, u0, v0, su, sv, tint);
     gfx_texture(NULL);
 }
 
@@ -376,8 +362,8 @@ void aa_strip(const float *pts, int n, float w, u32 rgba)
 }
 
 /* The unit circle in 96 steps, made at the first call (each angle through a
- * volatile, as corners above). A circle takes 16 points under radius 8, 24
- * under 16, 48 under 100, else 96 (r the outer radius: a ring's outer
+ * volatile, as ui.c's circle tables). A circle takes 16 points under radius
+ * 8, 24 under 16, 48 under 100, else 96 (r the outer radius: a ring's outer
  * feather, a disc's r + 0.5). A chord lies up to r (1 - cos(pi / points))
  * inside the true circle: 0.15 px under 8, 0.14 under 16, 0.21 under 100,
  * then r / 1868 (0.2 px at 374, 0.29 at 540). */
@@ -498,9 +484,9 @@ void aa_corners(float x, float y, float w, float h, float r, u32 rgba)
     float m = (w < h ? w : h) / 2;
     r = r > m ? m : r;
     if (r < 1) return;
-    if (!corners_made) corners();
     int seg = r < 8 ? 4 : 8;
-    const float *c = rc[seg == 8], *s = rs[seg == 8];
+    const float *c, *s;
+    ui_round_unit(seg, &c, &s);
     const float cx[4] = {x + r, x + w - r, x + w - r, x + r}, cy[4] = {y + r, y + r, y + h - r, y + h - r};
     u32 half = (rgba & ~0xffu) | ((rgba & 255) + 1) / 2, z = rgba & ~0xffu;
     for (int k = 0; k < 4; k++)

@@ -18,6 +18,7 @@
 #include "fs.h"
 #include "journal.h"
 #include "ui_text.h"
+#include "ui_kit.h"
 
 #define PI_F 3.14159265f
 
@@ -55,10 +56,12 @@ static int font_first = 32, font_count = 106, font_cols = 16;
  * advance. They are the same products and exact conversions of small
  * integers, so every glyph vertex keeps its bits, and run() makes no
  * int-to-float conversion (a store and a load on the PPU) and no division
- * per glyph. */
+ * per glyph. font_top is asc - base, the cell's top in the line box: one add
+ * to the whole y gives the bits of the two adds y + asc - base for every y
+ * under 2^23 in size (each sum is exact). */
 typedef struct { float u0, u1, v0, v1, adv; } glyph_t;
 static glyph_t glyphs[F_COUNT][112];
-static float font_pad[F_COUNT], font_cw[F_COUNT], font_ch[F_COUNT];
+static float font_pad[F_COUNT], font_cw[F_COUNT], font_ch[F_COUNT], font_top[F_COUNT];
 static int text_linear = 1;
 static const ui_atlas *latin;                /* text_utf8's five Latin atlases; NULL: the text is bytes */
 static int (*latin_map)(unsigned cp);
@@ -67,15 +70,17 @@ static unsigned rd16(const u8 *p) { return (unsigned)p[0] << 8 | p[1]; }
 static const u8 *align4(const u8 *p) { return p + (4 - (p - fonts_bin) % 4) % 4; }
 
 /* A byte of 4-bit alphas (the left pixel in the high nibble) as its two
- * A4R4G4B4 texels, white, alpha 0 as 0, in the order they lie in memory, so
- * that one 32-bit store writes both on the console and on the host. */
+ * A4R4G4B4 texels, in the order they lie in memory, so that one 32-bit store
+ * writes both on the console and on the host. White also at alpha 0: a
+ * bilinear sample (the text at 720p and 480p) then mixes no black into the
+ * edges, and at 1080p the alpha test drops those texels, whatever their
+ * colour. text_utf8.c, digits.c and icons.c take the same table. */
 static u32 texel_pair[256];
 
 static void texel_pairs(void)
 {
     for (int b = 0; b < 256; b++) {
-        unsigned a0 = b >> 4, a1 = b & 15;
-        u16 t[2] = {a0 ? (u16)(a0 << 12 | 0x0fff) : 0, a1 ? (u16)(a1 << 12 | 0x0fff) : 0};
+        u16 t[2] = {(u16)((b >> 4) << 12 | 0x0fff), (u16)((b & 15) << 12 | 0x0fff)};
         memcpy(&texel_pair[b], t, 4);
     }
 }
@@ -129,6 +134,7 @@ static int fonts_init(void)
         font_pad[k] = f->pad;
         font_cw[k] = f->cw;
         font_ch[k] = f->ch;
+        font_top[k] = f->asc - f->base;
     }
     return 0;
 }
@@ -267,38 +273,44 @@ UTF8 int fit_utf8(int font, const char *s, float maxw, int *brk, int *first)
 /* run() in UTF-8 mode, in two passes: the glyphs of the font's atlas (from
  * run()'s table, the same numbers), then those of its Latin atlas, so a line
  * binds each atlas once; the second pass only when the line has a glyph of
- * the Latin atlas. */
+ * the Latin atlas. A first walk counts the quads of each pass, for
+ * quad_next. */
 UTF8 float run_utf8(float x, float y, int font, u32 color, const char *s, int n)
 {
     const font_t *f = &fonts[font & 0xff];
     const ui_atlas *l = &latin[font & 0xff];
     const glyph_t *gt = glyphs[font & 0xff];
-    float px = 0;
-    int more = 0;                            /* a glyph of the Latin atlas: the second pass */
-    for (int pass = 0; pass < 1 + more; pass++) {
+    float xs = floor_px(x + 0.5f), ys = floor_px(y + 0.5f), px = 0;   /* x and y on whole pixels, for both passes */
+    int quads[2] = {0, 0};                   /* the glyphs that draw from each atlas: [1] > 0, the second pass */
+    for (int i = 0, len, which, k; i < n && s[i]; i += len) {
+        glyph_utf8(font, s, n, i, &len, &which, &k);
+        if (which >= 0 && s[i] != ' ') quads[which]++;
+    }
+    for (int pass = 0; pass < 1 + (quads[1] > 0); pass++) {
         int cw = pass ? l->cw : f->cw, ch = pass ? l->ch : f->ch, pad = pass ? l->pad : f->pad;
-        float top = floorf(y + 0.5f) + (pass ? l->asc - l->base : f->asc - f->base);
-        float du = (float)cw / l->aw, dv = (float)ch / l->ah;   /* the Latin atlas's */
-        px = floorf(x + 0.5f);
+        int left = quads[pass], room = 0;
+        float top = ys + (pass ? l->asc - l->base : font_top[font & 0xff]), du = 0, dv = 0;
+        gfx_vtx *q = NULL;
+        if (pass) du = (float)cw / l->aw, dv = (float)ch / l->ah;   /* the Latin atlas's cell */
+        px = xs;
         gfx_texture(pass ? &l->tex : &f->tex);
         for (int i = 0, len, which, k; i < n && s[i]; i += len) {
             int a = glyph_utf8(font, s, n, i, &len, &which, &k);
-            more |= which == 1;
             if (which == pass && s[i] != ' ') {
                 float x0 = px - pad, x1 = x0 + cw, y1 = top + ch;
-                gfx_vtx *q = gfx_prim(GFX_QUADS, 4);
+                q = quad_next(q, &room, &left);
                 if (pass) {
                     float u = (k % l->cols) * du, v = (k / l->cols) * dv;
                     q = gfx_put(q, x0, top, color, u, v);
                     q = gfx_put(q, x1, top, color, u + du, v);
                     q = gfx_put(q, x1, y1, color, u + du, v + dv);
-                    gfx_put(q, x0, y1, color, u, v + dv);
+                    q = gfx_put(q, x0, y1, color, u, v + dv);
                 } else {
                     const glyph_t *g = &gt[k];
                     q = gfx_put(q, x0, top, color, g->u0, g->v0);
                     q = gfx_put(q, x1, top, color, g->u1, g->v0);
                     q = gfx_put(q, x1, y1, color, g->u1, g->v1);
-                    gfx_put(q, x0, y1, color, g->u0, g->v1);
+                    q = gfx_put(q, x0, y1, color, g->u0, g->v1);
                 }
             }
             px += a;
@@ -308,24 +320,28 @@ UTF8 float run_utf8(float x, float y, int font, u32 color, const char *s, int n)
 }
 
 /* n characters, one quad each from the font's atlas, which is bound once per
- * run; each cell lands on whole pixels. */
+ * run; each cell lands on whole pixels. The glyphs that draw (all but the
+ * spaces) are counted first: quad_next reserves up to 64 of them at a time,
+ * the same vertices in the same draw as one gfx_prim per glyph. */
 static float run(float x, float y, int font, u32 color, const char *s, int n)
 {
     if (utf8_n(s, n)) return run_utf8(x, y, font, color, s, n);
-    const font_t *f = &fonts[font & 0xff];
     const glyph_t *gt = glyphs[font & 0xff];
-    float px = floorf(x + 0.5f), top = floorf(y + 0.5f) + f->asc - f->base;
+    float px = floor_px(x + 0.5f), top = floor_px(y + 0.5f) + font_top[font & 0xff];
     float pad = font_pad[font & 0xff], cw = font_cw[font & 0xff], y1 = top + font_ch[font & 0xff];
-    gfx_texture(&f->tex);
+    int left = 0, room = 0;
+    gfx_vtx *q = NULL;
+    for (int i = 0; i < n; i++) left += s[i] != ' ';
+    gfx_texture(&fonts[font & 0xff].tex);
     for (int i = 0; i < n; i++) {
         const glyph_t *g = &gt[glyph(font, s[i])];
         if (s[i] != ' ') {
             float x0 = px - pad, x1 = x0 + cw;
-            gfx_vtx *q = gfx_prim(GFX_QUADS, 4);
+            q = quad_next(q, &room, &left);
             q = gfx_put(q, x0, top, color, g->u0, g->v0);
             q = gfx_put(q, x1, top, color, g->u1, g->v0);
             q = gfx_put(q, x1, y1, color, g->u1, g->v1);
-            gfx_put(q, x0, y1, color, g->u0, g->v1);
+            q = gfx_put(q, x0, y1, color, g->u0, g->v1);
         }
         px += g->adv;
     }
@@ -333,21 +349,24 @@ static float run(float x, float y, int font, u32 color, const char *s, int n)
 }
 
 /* The text calls format into 320 bytes: a longer text is cut at 319. A
- * plain "%s" (a title, a heading, a footer item) skips vsnprintf: the same
- * bytes, cut at the same place. The text is s[0..n): s[n] may be no 0. */
+ * plain "%s" (a title, a heading, a footer item) and a format with no '%'
+ * (a label) skip vsnprintf: the same bytes, cut at the same place. The text
+ * is s[0..n): s[n] may be no 0. */
 static const char *vformat(char *buf, int *n, const char *fmt, va_list ap)
 {
+    const char *s = fmt;
+    int k = 0;
     if (fmt[0] == '%' && fmt[1] == 's' && !fmt[2]) {
-        const char *s = va_arg(ap, const char *);
-        int k = 0;
+        s = va_arg(ap, const char *);
         if (!s) s = "(null)";                /* as newlib's vsnprintf */
-        while (k < 319 && s[k]) k++;
-        *n = k;
-        return s;
+    } else if (strchr(fmt, '%')) {
+        vsnprintf(buf, 320, fmt, ap);
+        *n = (int)strlen(buf);
+        return buf;
     }
-    vsnprintf(buf, 320, fmt, ap);
-    *n = (int)strlen(buf);
-    return buf;
+    while (k < 319 && s[k]) k++;
+    *n = k;
+    return s;
 }
 
 #define VFORMAT(s, n, fmt, ap) \
@@ -523,7 +542,7 @@ void frame(float x, float y, float w, float h, float t, u32 c)
  * frame, each kept as it was: cosf and sinf depend only on the argument, so
  * every vertex keeps its bits, and a frame calls neither (on the console a
  * call took about 0.37 us: 2.9 ms a frame on the kit check's shapes screen). */
-static float rp_c[2][36], rp_s[2][36];       /* round_pts: seg 4 (20 points), seg 8 (36 points) */
+static float rp_c[2][36], rp_s[2][36];       /* round_pts (and fx.c): seg 4 (20 points), seg 8 (36 points) */
 static float ring_c[49], ring_s[49];
 static float disc_c[32], disc_s[32];
 static float spin_c[12], spin_s[12];
@@ -568,6 +587,12 @@ static void circle_tables(void)
         spin_c[i] = cosf(b);
         spin_s[i] = sinf(b);
     }
+}
+
+void ui_round_unit(int seg, const float **c, const float **s)
+{
+    *c = rp_c[seg == 8];
+    *s = rp_s[seg == 8];
 }
 
 /* The outline of a rounded rectangle, clockwise from the top-left corner;
@@ -1011,7 +1036,7 @@ void safe_calibrate(int first)
 {
     int e[4] = {safe_l, safe_t, safe_r, safe_b};
     int single = 0, sel = 0;
-    s64 since = 0, last = 0;
+    pad_rep rep = {0};                       /* an arrow held when the screen opens waits for a new press */
     static const char *const names[4] = {"left", "top", "right", "bottom"};
     safe_override(1);
     while (!quit) {
@@ -1028,12 +1053,8 @@ void safe_calibrate(int first)
         if (pressed & BTN_SQUARE) single = !single;
         if (single && (pressed & BTN_R1)) sel = (sel + 1) % 4;
         if (single && (pressed & BTN_L1)) sel = (sel + 3) % 4;
-        unsigned dir = held & (BTN_LEFT | BTN_RIGHT | BTN_UP | BTN_DOWN);
-        s64 now = sysGetSystemTime();
-        int step = 0;
-        if (pressed & dir) { step = 1; since = last = now; }
-        else if (dir && now - since > 350000 && now - last > 30000) { step = 1; last = now; }
-        if (step) {
+        unsigned dir = held & (BTN_LEFT | BTN_RIGHT | BTN_UP | BTN_DOWN);   /* a step moves by every arrow down */
+        if (pad_repeat(&rep, BTN_LEFT | BTN_RIGHT | BTN_UP | BTN_DOWN)) {
             int n[4] = {e[0], e[1], e[2], e[3]};
             if (!single) {
                 int h = (dir & BTN_RIGHT) ? 2 : (dir & BTN_LEFT) ? -2 : 0, v = (dir & BTN_UP) ? 2 : (dir & BTN_DOWN) ? -2 : 0;
@@ -1163,8 +1184,8 @@ int ui_leave(void)
     return (pressed & BTN_CIRCLE) ? 0 : 1;
 }
 
-/* The rule of safe_calibrate's edges: a press steps at once, a hold after
- * 350 ms, then every 30 ms. */
+/* The rule of safe_calibrate's edges (it calls this): a press steps at once,
+ * a hold after 350 ms, then every 30 ms. */
 unsigned pad_repeat(pad_rep *r, unsigned mask)
 {
     unsigned down = held & mask, went = pressed & mask;
@@ -1251,18 +1272,21 @@ static void job_run(const char *msg, void (*fn)(void), int cancelable)
         draw_job(0, 0);                      /* no thread: one frame, then the call in this thread */
         fn();
         job_pct = -1;
+        read_pad();                          /* held as the pad is now: a button still down is not a new press */
         pressed = armed = 0;
         return;
     }
+    /* Every frame reads the pad, also with no cancel, and once more after the
+     * last frame: held follows it, so a button pressed during the job and
+     * still down at its end is no new press at the next read_pad. */
     while (!job_done) {
-        if (cancelable) {
-            read_pad();
-            if (quit || (pressed & BTN_CIRCLE)) job_cancel = 1;
-        }
+        read_pad();
+        if (cancelable && (quit || (pressed & BTN_CIRCLE))) job_cancel = 1;
         draw_job((double)(sysGetSystemTime() - t0) / 1e6, cancelable);
     }
     sysThreadJoin(t, &ret);
     job_pct = -1;
+    read_pad();
     pressed = armed = 0;                     /* a button still down is not a new press */
 }
 

@@ -219,7 +219,9 @@ unsigned pad_repeat(pad_rep *r, unsigned mask);
 
 /* A blocking call in a second thread while this one draws a counter: a stopped
  * counter is the freeze signal. progress() changes the text, job_set_percent()
- * adds a bar. With cancel on, CIRCLE sets job_cancel for the call to see. */
+ * adds a bar. With cancel on, CIRCLE sets job_cancel for the call to see.
+ * Every frame reads the pad: a button pressed during the job is no new press
+ * after it. */
 extern volatile int job_cancel;
 void progress(const char *msg);
 void job_set_percent(int pct);       /* -1 = no bar */
