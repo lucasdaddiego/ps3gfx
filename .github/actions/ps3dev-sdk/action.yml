@@ -1,24 +1,38 @@
 name: ps3dev SDK
 description: >-
   The ps3dev nightly-2026-07-26 Linux bundle with PSL1GHT's 2020 runtime,
-  built by sdk_setup.sh into ~/ps3dev (cached on the script's hash).
+  built by sdk_setup.sh into ~/ps3dev without its ps3gfx step (cached on the
+  bundle checksums and PSL1GHT_REV).
 runs:
   using: composite
   steps:
-    - name: zsh for the build scripts, libelf for sprxlinker
+    - name: zsh for the build scripts
       shell: bash
-      run: sudo apt-get install -y -qq zsh libelf1t64 > /dev/null   # sprxlinker links libelf
+      run: sudo apt-get install -y -qq zsh > /dev/null
+
+    # The key holds what the cache is made of: the bundles' sum= values and
+    # PSL1GHT_REV. A PS3GFX_REV bump keeps the cache: the job installs its own
+    # checkout over the SDK, so sdk_setup.sh skips its ps3gfx step here.
+    - name: The SDK's cache key (the bundle checksums, PSL1GHT_REV)
+      id: sdk-key
+      shell: bash
+      run: |
+        pins=$(grep -oE 'sum=[0-9a-f]{64}|^PSL1GHT_REV=[0-9a-f]{40}' sdk_setup.sh)
+        echo "$pins"
+        echo "key=$(echo "$pins" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
 
     - name: Restore the SDK
       id: sdk-cache
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/ps3dev
-        key: ps3dev-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('sdk_setup.sh') }}
+        key: ps3dev-${{ runner.os }}-${{ runner.arch }}-${{ steps.sdk-key.outputs.key }}
 
     - name: Build the SDK (bundle download, PSL1GHT 2020 runtime)
       if: steps.sdk-cache.outputs.cache-hit != 'true'
       shell: bash
+      env:
+        PS3DEV_SKIP_PS3GFX: '1'
       run: ./sdk_setup.sh
 
     - name: SDK environment
