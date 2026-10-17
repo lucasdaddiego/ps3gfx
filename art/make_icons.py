@@ -15,7 +15,8 @@ Three sets, each one cell size and one atlas:
     S  32 px, bold: one glyph per icon, for chips, rows and the header;
     M  64 px, duotone: two layers per icon, the fill (the CSS draws it at
        20 % opacity) and the outline, for the three-day strip;
-    L 168 px, duotone: two layers, for the hero icon that turns and scales.
+    L 168 px, duotone: two layers, for the hero icon that turns and scales
+       (the snowflake: the outline only).
 The code points are the classes ph-<name> of the package's style.css (bold
 has regular's code points; a duotone icon is :before, the fill, and :after,
 the outline). Each glyph is drawn with its 'mm' anchor (the middle of the
@@ -23,7 +24,8 @@ advance and of the font's ascender and descender) at the centre of its cell,
 so the two layers of an icon overlay at one centre, and a turn about the
 centre keeps them together. A cell is twice the largest extent from the
 anchor in the set plus one clear pixel on each side (even, so the centre is
-a whole pixel and the atlas rows are whole bytes).
+a whole pixel and the atlas rows are whole bytes). The cells of a set fill
+rows of the column count that takes the least RSX memory.
 
 icons.bin, big-endian (the PPU's order), read by source/icons.c:
     'PHI1', u16 set count, u16 glyph count, u16 0, u16 0
@@ -45,10 +47,12 @@ GAMMA = 0.85                                  # make_font.py's: light glyphs on 
 
 # The code points, from @phosphor-icons/web@2.1.1's src/bold/style.css and
 # src/duotone/style.css: name, then the bold glyph, or the fill and the outline.
-BOLD = [('caret-up', 0xe13c), ('caret-down', 0xe136), ('minus', 0xe32a), ('drop', 0xe210), ('clock', 0xe19a),
-        ('wifi-high', 0xe4ea), ('wifi-slash', 0xe4f2), ('currency-dollar', 0xe550), ('newspaper', 0xe344),
-        ('info', 0xe2ce), ('warning', 0xe4e0), ('arrows-clockwise', 0xe094), ('wind', 0xe5d2),
-        ('sun-horizon', 0xe5b6), ('thermometer-simple', 0xe5cc), ('umbrella', 0xe684)]
+# Only icons that ps3gfx, PS3 Health or Couch draws: an icon costs RSX memory
+# in every app that calls icons_init (minus, warning, wind,
+# thermometer-simple and the snowflake's fill went on 2026-10-17).
+BOLD = [('caret-up', 0xe13c), ('caret-down', 0xe136), ('drop', 0xe210), ('clock', 0xe19a), ('wifi-high', 0xe4ea),
+        ('wifi-slash', 0xe4f2), ('currency-dollar', 0xe550), ('newspaper', 0xe344), ('info', 0xe2ce),
+        ('arrows-clockwise', 0xe094), ('sun-horizon', 0xe5b6), ('umbrella', 0xe684)]
 DUO = {'sun': (0xe472, 0xe473), 'moon': (0xe330, 0xe331), 'moon-stars': (0xe58e, 0xe58f), 'cloud': (0xe1aa, 0xe1ab),
        'cloud-sun': (0xe540, 0xe541), 'cloud-moon': (0xe53e, 0xe53f), 'cloud-fog': (0xe53c, 0xe53d),
        'cloud-rain': (0xe1b4, 0xe1b5), 'cloud-snow': (0xe1b8, 0xe1b9), 'cloud-lightning': (0xe1b2, 0xe1b3),
@@ -56,20 +60,27 @@ DUO = {'sun': (0xe472, 0xe473), 'moon': (0xe330, 0xe331), 'moon-stars': (0xe58e,
 WEATHER = ['sun', 'moon-stars', 'cloud-sun', 'cloud-moon', 'cloud', 'cloud-fog', 'cloud-rain', 'cloud-snow',
            'cloud-lightning']
 HERO = ['sun', 'moon', 'cloud', 'lightning', 'snowflake']
+LINE_ONLY = {'snowflake'}                     # the outline alone: Couch's falling flakes draw no fill
 
 
 def sets():
-    """The three sets: letter, pixel size, font file, turns, columns, [(id name, code point)]."""
+    """The three sets: letter, pixel size, font file, turns, [(id name, code point)]."""
     s = [('IC_S_' + n, cp) for n, cp in BOLD]
     m = [(f'IC_M_{n}_{k}', DUO[n][i]) for n in WEATHER for i, k in enumerate(('FILL', 'LINE'))]
-    l = [(f'IC_L_{n}_{k}', DUO[n][i]) for n in HERO for i, k in enumerate(('FILL', 'LINE'))]
+    l = [(f'IC_L_{n}_{k}', DUO[n][i]) for n in HERO for i, k in enumerate(('FILL', 'LINE'))
+         if not (n in LINE_ONLY and k == 'FILL')]
     fix = lambda g: [(name.replace('-', '_').upper(), cp) for name, cp in g]
-    # columns: the fewest empty cells (16 = 8 x 2, 18 = 6 x 3, 10 = 5 x 2)
-    return [('S', 32, 'Phosphor-Bold.ttf', 0, 8, fix(s)), ('M', 64, 'Phosphor-Duotone.ttf', 0, 6, fix(m)),
-            ('L', 168, 'Phosphor-Duotone.ttf', 1, 5, fix(l))]
+    return [('S', 32, 'Phosphor-Bold.ttf', 0, fix(s)), ('M', 64, 'Phosphor-Duotone.ttf', 0, fix(m)),
+            ('L', 168, 'Phosphor-Duotone.ttf', 1, fix(l))]
 
 
-def build(folder, letter, px, ttf, turns, cols, glyphs):
+def columns(n, cw):
+    """The columns of n cells cw wide with the least RSX memory: gfx_tex_new rounds a row of A4R4G4B4 texels
+    up to 64 bytes, and the rows of cells are the same height for every choice. The fewest columns on a tie."""
+    return min(range(1, n + 1), key=lambda c: ((c * cw * 2 + 63) // 64 * 64 * ((n + c - 1) // c), c))
+
+
+def build(folder, letter, px, ttf, turns, glyphs):
     f = ImageFont.truetype(os.path.join(folder, ttf), px)
     ex = ey = 0
     for name, cp in glyphs:
@@ -78,6 +89,7 @@ def build(folder, letter, px, ttf, turns, cols, glyphs):
             sys.exit(f'{name}: U+{cp:04X} has no ink in {ttf}')
         ex, ey = max(ex, -x0, x1), max(ey, -y0, y1)
     cw, ch = 2 * (ex + 1), 2 * (ey + 1)
+    cols = columns(len(glyphs), cw)
     rows = (len(glyphs) + cols - 1) // cols
     atlas = Image.new('L', (cols * cw, rows * ch), 0)
     d = ImageDraw.Draw(atlas)
@@ -90,7 +102,7 @@ def build(folder, letter, px, ttf, turns, cols, glyphs):
         c = atlas.crop((x, y, x + cw, y + ch))
         bb = c.getbbox()
         assert bb and bb[0] >= 1 and bb[1] >= 1 and bb[2] <= cw - 1 and bb[3] <= ch - 1, (letter, x, y, bb)
-    return dict(letter=letter, px=px, turns=turns, cw=cw, ch=ch, cells=cells, glyphs=glyphs, atlas=atlas)
+    return dict(letter=letter, px=px, turns=turns, cw=cw, ch=ch, cols=cols, cells=cells, glyphs=glyphs, atlas=atlas)
 
 
 def pack(built):
@@ -113,7 +125,8 @@ def ids_h(built):
              ' * from Phosphor Icons 2.1.1 (MIT, LICENSES/PHOSPHOR.txt). Do not edit:',
              ' * run the script. IC_S_*: 32 px, bold. IC_M_*: 64 px, IC_L_*: 168 px,',
              ' * duotone: _FILL is the fill layer (tint it, for example at alpha 0x55),',
-             ' * _LINE the outline; draw the fill first. */',
+             ' * _LINE the outline; draw the fill first. The L snowflake has only its',
+             ' * outline. */',
              '#ifndef ICONS_IDS_H', '#define ICONS_IDS_H', '', 'enum {']
     for b in built:
         for name, cp in b['glyphs']:
@@ -156,8 +169,8 @@ if __name__ == '__main__':
         a = b['atlas']
         pitch = (a.width * 2 + 63) // 64 * 64
         rsx += pitch * a.height
-        print(f"{b['letter']} {b['px']:3} px: {len(b['glyphs'])} glyphs, cell {b['cw']}x{b['ch']}, atlas {a.width}x{a.height} "
-              f"({pitch * a.height} B of RSX memory as A4R4G4B4)")
+        print(f"{b['letter']} {b['px']:3} px: {len(b['glyphs'])} glyphs, cell {b['cw']}x{b['ch']}, {b['cols']} columns, "
+              f"atlas {a.width}x{a.height} ({pitch * a.height} B of RSX memory as A4R4G4B4)")
     print(f'data/icons.bin {len(data)} bytes, {sum(len(b["glyphs"]) for b in built)} glyphs, {rsx} B of RSX memory')
     if len(sys.argv) == 3:
         sheet(built, sys.argv[2])

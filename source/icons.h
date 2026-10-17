@@ -1,16 +1,17 @@
 /* The icons (icons.c): Phosphor Icons 2.1.1 (MIT, LICENSES/PHOSPHOR.txt) in
  * three sets, data/icons.bin (art/make_icons.py), an archive member that only
- * icons.c references: an app links both, and uses their 0.75 MB of RSX memory,
+ * icons.c references: an app links both, and uses their 0.68 MB of RSX memory,
  * only when it calls icons_init. Every pkg that links them ships
  * PHOSPHOR.txt (as USRDIR/PHOSPHOR.txt beside OFL.txt).
  *
  * The ids are in icons_ids.h: IC_S_* (32 px, bold) for chips, rows and the
  * header; IC_M_* (64 px) and IC_L_* (168 px) duotone, two layers per icon,
  * *_FILL (tint it, for example at alpha 0x55) and *_LINE (the outline): draw
- * the fill first, at the same centre. The glyphs are white, so the colour of
- * a call tints them. The S and M sets bind as the fonts do (nearest at
- * 1080p); the L set always binds bilinear, because its layers turn and
- * scale; icon_rot always binds bilinear, for any set. */
+ * the fill first, at the same centre (IC_L_SNOWFLAKE_LINE has no fill). The
+ * glyphs are white, so the colour of a call tints them. The S and M sets
+ * bind as the fonts do (nearest at 1080p); the L set always binds bilinear,
+ * because its layers turn and scale; icon_rot always binds bilinear, for
+ * any set. */
 #ifndef ICONS_H
 #define ICONS_H
 

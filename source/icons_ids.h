@@ -2,14 +2,14 @@
  * from Phosphor Icons 2.1.1 (MIT, LICENSES/PHOSPHOR.txt). Do not edit:
  * run the script. IC_S_*: 32 px, bold. IC_M_*: 64 px, IC_L_*: 168 px,
  * duotone: _FILL is the fill layer (tint it, for example at alpha 0x55),
- * _LINE the outline; draw the fill first. */
+ * _LINE the outline; draw the fill first. The L snowflake has only its
+ * outline. */
 #ifndef ICONS_IDS_H
 #define ICONS_IDS_H
 
 enum {
     IC_S_CARET_UP,                  /* U+E13C */
     IC_S_CARET_DOWN,                /* U+E136 */
-    IC_S_MINUS,                     /* U+E32A */
     IC_S_DROP,                      /* U+E210 */
     IC_S_CLOCK,                     /* U+E19A */
     IC_S_WIFI_HIGH,                 /* U+E4EA */
@@ -17,11 +17,8 @@ enum {
     IC_S_CURRENCY_DOLLAR,           /* U+E550 */
     IC_S_NEWSPAPER,                 /* U+E344 */
     IC_S_INFO,                      /* U+E2CE */
-    IC_S_WARNING,                   /* U+E4E0 */
     IC_S_ARROWS_CLOCKWISE,          /* U+E094 */
-    IC_S_WIND,                      /* U+E5D2 */
     IC_S_SUN_HORIZON,               /* U+E5B6 */
-    IC_S_THERMOMETER_SIMPLE,        /* U+E5CC */
     IC_S_UMBRELLA,                  /* U+E684 */
     IC_M_SUN_FILL,                  /* U+E472 */
     IC_M_SUN_LINE,                  /* U+E473 */
@@ -49,7 +46,6 @@ enum {
     IC_L_CLOUD_LINE,                /* U+E1AB */
     IC_L_LIGHTNING_FILL,            /* U+E2DE */
     IC_L_LIGHTNING_LINE,            /* U+E2DF */
-    IC_L_SNOWFLAKE_FILL,            /* U+E5AA */
     IC_L_SNOWFLAKE_LINE,            /* U+E5AB */
     IC_COUNT
 };
