@@ -50,7 +50,8 @@ the memory layout, the source of each RSX word and the shader recipe):
   `ui_stat`, `ui_stats` (the busy, wait and period times of the frames, and gfx's counts), `ui_shot` (the
   TV picture as a PPM, `shot.c`)
 - the pad: `read_pad`, `gesture`, `ui_leave`, `pad_rep`, `pad_repeat` (a held button repeats after 350 ms, then every 30 ms)
-- a job: `job_cancel`, `progress`, `job_set_percent`, `run_job`, `run_job_cancelable` (`progress()` takes a string literal or a static buffer)
+- a job: `job_cancel`, `progress`, `job_set_percent`, `run_job`, `run_job_cancelable` (`progress()` takes a string literal or a static buffer;
+  every frame of a job reads the pad, also with no cancel, so a button held through the job is no new press after it)
 - `first_run_prompt`
 - the visible area: `safe_l`, `safe_t`, `safe_r`, `safe_b`, `SAFE_DEF_*`, `SAFE_MIN_*`, `safe_valid`, `safe_load`, `safe_set`, `safe_apply`, `safe_override`
 
@@ -98,7 +99,8 @@ reads the call as frozen.
 `<ps3gfx/spu_fx_kern.h>`, the effects program's kernels and job drivers in plain C on a 4-lane layer (spu-gcc's
 vectors, or four plain lanes on the host): `fx_noise_init`, `fx_sky_job`, `fx_aurora_job`, `fx_rain_job`, the
 output callbacks `fx_io`, the buffers `fx_sky_ws`, `fx_aur_ws`, `fx_rain_state`, the vertex `fx_vtx` (gfx_vtx's
-layout), and the parts the jobs use (`fx_cloud_row`, `fx_glass_src`, `fx_hbox`, `fx_vbox`, `fx_aurora_row`, ...).
+layout), and the parts the jobs use (`fx_cloud_row`, `fx_cloud_glass_row`, `fx_glass_src`, `fx_hbox`, `fx_vbox`,
+`fx_aurora_row`, `fx_quad`, ...).
 An app's preview twin runs a job at once with an fx_io that copies into its textures.
 
 `<ps3gfx/digits.h>`, the display digits (`digits.c` with `digits.bin`, linked only by an app that calls
@@ -110,15 +112,15 @@ An app's preview twin runs a job at once with an fx_io that copies into its text
   (UTF-8 C2 B0 or the byte B0); `-` draws the minus sign.
 
 `<ps3gfx/icons.h>` and `<ps3gfx/icons_ids.h>`, the icons (`icons.c` with `icons.bin`, linked only by an app that
-calls `icons_init`: 753,792 B of RSX memory, 184,516 B of data in the ELF): Phosphor Icons 2.1.1 (MIT)
+calls `icons_init`: 675,072 B of RSX memory, 167,948 B of data in the ELF): Phosphor Icons 2.1.1 (MIT)
 - `icons_init` (a failed one stays failed, as `digits_init`), `icon` (centred, on a whole pixel), `icon_rot` (turned and scaled about the centre, no snap, always
   bilinear: an S or M icon that moves by fractions of a pixel too, through a second `gfx_tex` of its set's
   texels with no new RSX memory), `icon_size`
-- the ids `IC_S_*` (32 px bold: caret-up, caret-down, minus, drop, clock, wifi-high, wifi-slash,
-  currency-dollar, newspaper, info, warning, arrows-clockwise, wind, sun-horizon, thermometer-simple, umbrella),
+- the ids `IC_S_*` (32 px bold: caret-up, caret-down, drop, clock, wifi-high, wifi-slash,
+  currency-dollar, newspaper, info, arrows-clockwise, sun-horizon, umbrella),
   `IC_M_*_FILL` and `IC_M_*_LINE` (64 px duotone: sun, moon-stars, cloud-sun, cloud-moon, cloud, cloud-fog,
   cloud-rain, cloud-snow, cloud-lightning), `IC_L_*_FILL` and `IC_L_*_LINE` (168 px duotone, always bilinear: sun,
-  moon, cloud, lightning, snowflake), `IC_COUNT`
+  moon, cloud, lightning; the snowflake is `IC_L_SNOWFLAKE_LINE` only, with no fill), `IC_COUNT`
 
 `<ps3gfx/fx.h>`, drawing helpers on the public gfx API (`fx.c`, linked only by an app that calls one):
 - `tex_sub` (a part of a texture into a rect), `tex_round` (the same in a rounded rect, the outline of
@@ -177,8 +179,9 @@ effects program (`<ps3gfx/spu_fx.h>`, `<ps3gfx/spu_fx_kern.h>`,
 `spu_fx_spu`), a second SPU program, so the kit's program, which PS3 Health
 embeds, does not change. The atlases bind as the
 fonts do (nearest at 1080p), except the L icons, which always bind bilinear
-because they turn and scale; their texels are white also at alpha 0, so a
-bilinear sample mixes no black into the edges.
+because they turn and scale; their texels are white also at alpha 0, as the
+digits' are (and since 2026-10-17 the fonts' and the Latin atlases' too), so
+a bilinear sample mixes no black into the edges.
 
 The addition of 2026-10-14, for Couch's first console round of 0.3.0 ("some
 lines are rough"): the anti-aliased helpers of `fx.h` (`aa_*`), new
@@ -222,6 +225,38 @@ a picture on the slowest SPU (0.5.0 on the old program: 2.23 ms). Not yet:
 Cell Bench's kit check, which compares `ui_shot`'s bytes, and the aurora on
 the new program.
 
+The fixes of the second review of 2026-10-17, after that console round:
+`run_job` reads the pad in every frame of a job, also with no cancel, and
+once more after it (a button pressed during the job and still down at its
+end read as a new press), `safe_calibrate` steps by `pad_repeat` (an arrow
+held when the screen opens waits for a new press), a `latin.bin` with no
+U+25A1 fails `text_utf8`, the fonts' and the Latin atlases' texels are white
+also at alpha 0 (bilinear text at 720p and 480p mixed black into its edges:
+they are brighter now, by up to 63 levels; 1080p keeps its pixels),
+`gfx_copy_to_main` makes its `dcbf` pass before a transfer in the first round
+only (Health's 4 MB job copy: 40,448 `dcbf`, not 65,536), and the icons that
+no app draws went (`IC_S_MINUS`, `IC_S_WARNING`, `IC_S_WIND`,
+`IC_S_THERMOMETER_SIMPLE` and `IC_L_SNOWFLAKE_FILL`): every id after
+`IC_S_CARET_DOWN` moved, so an app rebuilds against the new `icons_ids.h`.
+The speed changes keep every vertex's bits: `run`, `run_utf8` and `digits`
+reserve up to 64 glyph quads per `gfx_prim`, not one per glyph, with the same
+vertices and draws (the kit check's trace: 9,357 such calls, not 180,255),
+the text rounds with float adds too (the archive references no `floorf`), a
+format with no `%` skips `vsnprintf` as a plain `"%s"` does, `icon_rot` calls
+no `cosf` or `sinf` at angle 0 and keeps the last angle's pair, and `fx.c`
+takes `ui.c`'s corner tables (`source/ui_kit.h`, not installed, holds what
+`ui.c` shares with the kit's other files). The effects program writes a
+quad as five quadword stores, sums the rain's words only when the block asks
+(`p.rain.check`), and takes a band's glass from its own even cloud rows'
+samples (the glass moves by at most 8 a channel: the three glass hashes are
+new); `data/spu_fx.spu` and `FX_KAT` change. In the preview `ui_shot` reads
+through `gfx_copy_to_main`, as on the console (`tools/preview/README.md`).
+They change PS3 Health's, Cell Bench's and Couch's ELFs. At 1080p the smoke
+app's and the kit check's snapshots keep their bytes, except the smoke app's
+icons page (the icons that went; a turned or scaled icon differs by 1 level
+in a few hundred pixels and by 15 in a few, the new atlas's UVs). No console
+has run them yet: the sky's 1.73 ms above is the program before them.
+
 ## The RSX copy
 
 `gfx_copy_to_main(src, dst, bytes)` copies RSX local memory into main
@@ -243,9 +278,9 @@ area from 64 KB to 1 MB, main memory that the RSX can already write and that
 no frame uses between frames), in lines of 4 KB (240 lines a round, under
 the 2047 of one method), then backend label 255 (the fence of the frame).
 The PPU waits for the label with the frame's bounded wait (200 us polls,
-about 2 s), drops the area's lines from its cache (`dcbf` before and after
-the transfer), and copies the round to `dst`. So `dst` needs no mapping and
-no alignment, and the call maps nothing.
+about 2 s), drops the area's lines from its cache (`dcbf` before the first
+round's transfer and after each transfer), and copies the round to `dst`.
+So `dst` needs no mapping and no alignment, and the call maps nothing.
 
 Where:
 - `gfx_copy_to_main`: in the drawing thread (the one that calls
@@ -283,7 +318,13 @@ PSL1GHT's 2021+ runtime die before `main` on HFW 4.93 + PS3HEN 3.6.0 (PS3
 Health's README has the finding). The library uses nothing from the bundle's
 `portlibs/`: `make install` writes into it. `sdk_setup.sh` (PS3 Health's,
 unchanged) makes `~/ps3dev` that SDK; an app keeps its own copy of the
-script with the pin.
+script with the pin. A later run skips each step whose stamp names its pin:
+the runtime when `$PS3DEV/.runtime-2020` starts with `PSL1GHT 6e565a7,`, the
+ps3gfx step when `portlibs/ppu/share/ps3gfx/COMMIT` is `PS3GFX_REV` and
+`$PS3DEV/src/ps3gfx` is a clone at that commit, so a run on a finished SDK
+only sets the exports. A new bundle extraction removes `.runtime-2020` first
+(the bundle brings its own runtime). `PS3DEV_SKIP_PS3GFX=1` skips the ps3gfx
+step (CI installs its own checkout).
 
 ## Build and install
 
@@ -500,7 +541,8 @@ by DMA and runs the job only when the block's serial is the mailbox word;
 else it puts a report with `status` `FX_ST_SERIAL` and writes nothing else.
 After the job it puts the report: `serial`, `done` 1, `ticks` (the
 decrementer ticks of the job), `count` (the jobs so far), `sum` (the word
-sum of the check row, or of every rain word sent), `sum2` (the glass's check
+sum of the check row, or of every rain word sent when the block's
+`p.rain.check` is 1, else 0), `sum2` (the glass's check
 row), `quads` (rain; 0 for sky and aurora). An exit flag in the block gives a last report (`done` 2) and
 the exit status `FX_EXIT_DONE | index`. The first 48 bytes of the report are
 the kit's. The mode is a field of each block: one thread may run a sky job,
@@ -526,11 +568,15 @@ The modes:
   under 0x30 is an ordered 4 x 4 dither to multiples of 0x10 (its mean is the
   alpha; ps3gfx's alpha test drops texels under 0x10). The glass: the sky's
   gradient (`sky[4]` at 0, 55, 80 and 100 % of the height) and the clouds
-  composited at the centre of each glass pixel, for the band's rows and 9
-  more on each side, then three box passes of radius 3 on each axis in
+  composited, sampled at picture pixel (2 gx, 2 gy): a band's own rows from
+  its even cloud rows' samples, the 9 margin rows on each side from samples
+  of their own, then three box passes of radius 3 on each axis in
   integers (raw sums, then / 343 rounded once per axis: 343 is odd, so no
   value is a half and the SPU and the host give the same bits). The margin
-  makes each band's glass independent of the others.
+  makes each band's glass independent of the others. Until 2026-10-17 every
+  glass row sampled the clouds again, at the centre of its 2 x 2 pixels
+  (picture x 2 gx + 0.5, y 2 gy + 0.5): the new samples change the glass by
+  at most 8 a channel.
 - `FX_RAIN` (11): up to 1,500 drops (or 300 flakes, `kind` `FX_FLAKES`) in
   the local store, moved by `dt` each job; the quads go to `out`, the first
   vertex of `gfx_block(GFX_QUADS, 4 * fx_rain_quads(count, kind), 128)`, in
@@ -538,7 +584,11 @@ The modes:
   so it slants with the wind (`fx_rain_wind`: a wind from the south-east
   moves the drops left; capped at 70 % of the fall). Three layers by index:
   far drops slow, short and dim. 40 splash quads follow the drops. A flake is
-  a square for the glow texture, swaying 20 px at 0.5 Hz.
+  a square for the glow texture, swaying 20 px at 0.5 Hz. `p.rain.check` (a
+  `uint32_t` after `alpha`, byte 88 of `fx_ctl`): 1 makes the report's `sum`,
+  0 gives `sum` 0 with no pass over the quads (the pass is about 23 cycles a
+  vertex), so an app asks in one job of many. The same `fx_rain_job` on the
+  PPU sums nothing either when `check` is 0.
 - `FX_AURORA` (12): 640 x 360 A8R8G8B8 for the rows [y0, y1): three curtains
   (each a base height from 1D noise, one fold in about 20 s, fine rays and a
   slow brightness along x; exp fall-off above the base, a sharp edge under
@@ -565,32 +615,35 @@ function); `make -C spu/fx update` copies the program to `data/spu_fx.spu`.
 The flags are the kit's (no libm: sin and exp are polynomials).
 
 This build (spu-gcc 7.2.0, the five-octave clouds of 2026-10-14, the
-channel and curtain loops unrolled by hand on 2026-10-17): text 24,952
-bytes, data 816 (newlib's), bss 116,240, `data/spu_fx.spu` 26,776 bytes.
+channel and curtain loops unrolled by hand on 2026-10-17, then the second
+review's quadword quads and the band's own glass samples): text 32,152
+bytes, data 816 (newlib's), bss 116,240, `data/spu_fx.spu` 34,072 bytes.
 The local store:
 
 | Address | Size | What |
 |---|---|---|
-| 0x00000 | 25,984 B | the code, the constants, newlib's data |
-| 0x06580 | 74,752 B | one union of the jobs' buffers: the sky's (two rows, the horizontal passes, the glass band 3 x 45 x 240 x 16 bits), the aurora's (the curtains per column, two rows), the rain's two quad buffers |
-| 0x18980 | 24,704 B | the rain's particles and splashes (kept between jobs) |
-| 0x1ea00 | 16,384 B | the noise table |
-| 0x22a00 | 256 B | the control block, the report |
-| 0x22b10 | | `_end` (CI: at most 0x28000); 103,664 B free under 0x3c000 |
-| 0x3c000 | 16 KB | the stack; the deepest call is about 3 KB (main 1,264 B, the sky job 1,840 B) |
+| 0x00000 | 33,280 B | the code, the constants, newlib's data |
+| 0x08200 | 74,752 B | one union of the jobs' buffers: the sky's (two rows, the horizontal passes, the glass band 3 x 45 x 240 x 16 bits), the aurora's (the curtains per column, two rows), the rain's two quad buffers |
+| 0x1a600 | 24,704 B | the rain's particles and splashes (kept between jobs) |
+| 0x20680 | 16,384 B | the noise table |
+| 0x24680 | 256 B | the control block, the report |
+| 0x24790 | | `_end` (CI: at most 0x28000); 96,368 B free under 0x3c000 |
+| 0x3c000 | 16 KB | the stack; the deepest call is about 3.9 KB (main 1,312 B, the sky job 1,040 B, `fx_cloud_glass_row` 1,568 B) |
 
 The cost on the SPU is an estimate: the instructions of each inner loop
 (spu-objdump), even and odd pipes counted apart, one cycle per instruction
-of the busier pipe (no stalls), at 3.2 GHz:
+of the busier pipe (no stalls), at 3.2 GHz. The rain's counts "with the
+stalls" follow spu_timing's rules on the same code: a model too, not a
+console measurement.
 
 | Job | Per pixel or quad | One SPU's share of a picture | Design |
 |---|---|---|---|
-| FX_SKY: the clouds | 82 cycles (rolled loops: 87.5; three octaves: 72) | 54 rows: 2.13 M cycles | |
-| FX_SKY: the glass source | 80 cycles (rolled: 89; three octaves: 72) | 45 rows of 240: 0.86 M | |
+| FX_SKY: the clouds | 82 cycles, 329 a quad (rolled loops: 87.5; three octaves: 72); an even row 682 per 8 pixels, the glass source's mix included | 27 + 27 rows: 2.17 M cycles | |
+| FX_SKY: the glass source of the margins | 80 cycles, 321 per 4 glass pixels (rolled: 89; three octaves: 72) | 18 rows of 240: 0.35 M | |
 | FX_SKY: the blur and the glass rows | | 0.67 M | |
-| FX_SKY, all | | 3.66 M = 1.14 ms (three octaves: 3.3 M, 1.04 ms) | 0.6 ms |
+| FX_SKY, all | | 3.19 M = 1.00 ms (before the second review, every glass row with its own samples: 3.66 M, 1.14 ms; three octaves: 3.3 M, 1.04 ms) | 0.6 ms |
 | FX_AURORA | 37 cycles (rolled: 41) | 72 rows: 1.77 M = 0.55 ms (the pixel loop 1.70 M, the curtains' preparation 0.06 M) | 1.2 to 1.4 ms |
-| FX_RAIN | about 140 cycles a quad, 50 more for the sum | 1,540 quads: 0.3 M = 0.09 ms | 0.03 to 0.05 ms |
+| FX_RAIN | about 56 cycles a drop's quad (before the second review: 189 by the same count, and the sum's 48 in every job), 48 more for the sum, only when `p.rain.check` is 1 | 1,540 quads: about 0.09 M = 0.03 ms; with the stalls 1,500 drop steps of 157 cycles, 0.24 M = 0.07 ms (before: 0.85 M with the sum, 0.27 ms); snow, 300 flakes of 302: 0.09 M | 0.03 to 0.05 ms |
 
 The console measured the three-octave sky (Couch, 2026-10-14): 1.97 ms a
 picture on the slowest SPU, 1.9 times this estimate (the stalls). The same
@@ -605,9 +658,12 @@ loops: spu-gcc 7.2 does not unroll them at -O2 and has no `#pragma GCC
 unroll`, so each one reloaded its constants and missed its exit branch once a
 quad. On the console (Couch 0.5.1, 2026-10-17) the unrolled sky takes 1.73 ms
 a picture on the slowest SPU, 1.84 to 1.87 ms at most (Couch 0.5.0 on the
-rolled program: 2.23 ms, 2.37 ms at most), about 22 % less. On the host (Apple M4, one thread, the
-plain lanes): a sky picture 3.2 ms (three octaves: 2.9 ms), an aurora
-picture 2.0 ms, a rain job 0.007 ms.
+rolled program: 2.23 ms, 2.37 ms at most), about 22 % less. The second
+review's sky (a band's glass from its own cloud samples, 3.19 M) has no
+console time yet. On the host (Apple M4, one thread, the
+plain lanes): a sky picture 3.2 ms (three octaves: 2.9 ms; in one run of
+2026-10-17 the band's own glass samples took it from 4.47 to 4.10 ms), an
+aurora picture 2.0 ms, a rain job 0.007 ms.
 
 ## The preview on the host
 
@@ -627,9 +683,10 @@ weak symbols: an app's `tools/preview/pv_app.c` defines the strong
 end, the gfx traces (`PV_GFXTRACE`), `diff.py` and the pad scripts.
 `tools/preview/smoke/` is the smallest app, for CI. On the host an app
 includes `<ps3gfx/ui.h>` as on the console: `tools/preview/stub/ps3gfx/`
-holds a forwarder to the checkout's own header for each of the eleven public
-headers, so the preview builds against the sources it previews, never
-against the installed copy.
+holds a forwarder to the checkout's own header for ten of the eleven public
+headers (not `icons_ids.h`: `icons.h` includes it from `source/`), so the
+preview builds against the sources it previews, never against the installed
+copy.
 
 ## Tests
 
@@ -661,16 +718,19 @@ against the installed copy.
   pass. Also the saturating count and no write outside the area:
   `cc -std=c99 -Wall -Wextra -I source test/test_spu_kit.c`.
 - `test/test_spu_fx.c`: the effects program (the section "The effects program"): the contract's sizes and
-  layout, the known-answer test, FX_SKY's band equality (five bands of 54 rows, then six uneven ones, each
-  alone equal to its rows of the full picture, the glass rows too), the determinism, the coverage ends, the RGB
+  layout, `fx_quad`'s vertex order, the known-answer test, FX_SKY's band equality (five bands of 54 rows, then
+  six uneven ones, each alone equal to its rows of the full picture, the glass rows too), the glass source of a
+  band's own row (from its even cloud row's samples) against the margin rows' rule, the determinism, the coverage ends, the RGB
   rule under alpha 0, the dither, the blur (flat in, flat out; random rows equal to a plain reference of three
   box passes per axis; the raw weights sum to 343 and spread an impulse symmetrically), FX_AURORA's band
-  equality and its brightness cap, FX_RAIN's count, bounds, slant against the wind, cap, determinism and snow,
+  equality and its brightness cap, FX_RAIN's count, bounds, slant against the wind, cap, determinism, `check` 0
+  (`sum` 0, the same quads and the same particles) and snow,
   the jobs' refusals, fx_tou at cfltu's edges, a NaN or far sun, a NaN or huge snow time, `quads` 0 in a sky or
   aurora report after a rain job, and that a driver waits for a buffer before it fills it again (the host fx_io
   hashes each piece at the put and checks it at the wait):
   `cc -std=c99 -O2 -Wall -Wextra -ffp-contract=off -I source -I source/gfx -I tools/preview/stub test/test_spu_fx.c -lm`.
-  `--golden` checks the pictures' hashes (the same on arm64 and x86-64 with clang 21; CI does not run it),
+  `--golden` checks the pictures' hashes (the same on arm64 and x86-64 with clang 21; the three glass hashes of
+  2026-10-17 checked on arm64 only, at -O2 and -O0; CI does not run it),
   `--out DIR` writes the reference pictures as PPM, `--bench` times the jobs on the host, `--quantiles`
   prints the cloud value's quantiles every 10 % (the table `FX_CLOUD_MID` of the coverage).
 - `tools/preview/kitcheck/` (CI): an app for the host only that calls the kit
@@ -678,7 +738,8 @@ against the installed copy.
   text_wrap_lines against text_wrap (5,250 cases), the va_list calls against the variadic ones (also past the
   319-byte cut), the preview's offline socket calls, gfx_tex_new's rows, num_field's width, the gfx_block index and address,
   gfx_copy_to_main on the preview (a texture's bytes, the range and alignment refusals), pad_repeat's frames
-  with a held DOWN, ui_shot against the preview's own snapshot of the frame (CI compares the two files),
+  with a held DOWN, ui_shot against the preview's own snapshot of the frame (CI compares the two files), the
+  front buffer's rows by gfx_copy_to_main with the same bytes (the path ui_shot takes),
   ui_stats on the preview's clock, and after text_utf8: ASCII measures and draws as before, the fallbacks,
   the cut sequences and the text_fit and text_wrap breaks on whole code points
   (16,667 us a frame, all of it in gfx_end; with ui_submit all of it busy, counted in the next begin_frame).
@@ -708,7 +769,8 @@ against the installed copy.
 - The atlases: `art/make_font.py --digits <InterVariable.ttf>` writes `data/digits.bin` and
   `art/make_icons.py <folder>` writes `data/icons.bin` and `source/icons_ids.h` from
   `Phosphor-Bold.ttf` and `Phosphor-Duotone.ttf` (`@phosphor-icons/web@2.1.1`, sha256 checked; ps3sdk keeps
-  them in `fonts/`). Both give the committed bytes with the ps3dev venv's Pillow 12.3.0 (FreeType 2.14.3). CI
+  them in `fonts/`), each set in the column count with the least RSX memory (S 12 x 1, M 9 x 2, L 3 x 3:
+  `gfx_tex_new` rounds a row up to 64 bytes). Both give the committed bytes with the ps3dev venv's Pillow 12.3.0 (FreeType 2.14.3). CI
   does not rebuild them: ps3sdk is private, and another Pillow or FreeType may rasterize differently.
 - `tools/preview/smoke/check_tex8.py` (CI): the smoke app draws a 4 x 4
   A8R8G8B8 texture 64 px a texel, and each texel's colour must fill its block
@@ -729,8 +791,11 @@ against the installed copy.
   with PS3 Health 2.0.1's. Traces hold no copy, and `gfx_rsx.c` now uses
   `__dcbf` (the copy's cache pass): the harness's host model needs it.
 - CI (`.github/workflows/ci.yml`): the host job runs the journal, file, gfx, SPU kit and effects tests, the kit check, the
-  script and Python checks and the smoke preview on gcc with one snapshot and its texture check;
-  the ppu job builds and installs the archive with the same `sdk_setup.sh`,
+  script and Python checks and the smoke preview on gcc with one snapshot and its texture check,
+  and builds the smoke again with an 8 KB vertex area (`PV_CFLAGS='-DGFX_VTX_BYTES=8192'`): it must
+  drain, and its four snapshots must equal the default build's;
+  the ppu job builds the SDK with `sdk_setup.sh` without its ps3gfx step (`PS3DEV_SKIP_PS3GFX=1`; the cache's
+  key is the bundle checksums and `PSL1GHT_REV`), builds and installs the archive of its checkout,
   builds the two SPU programs again and compares them with the committed ones,
   and runs the `spu-nm` and `ppu-nm` checks.
 

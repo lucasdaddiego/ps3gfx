@@ -24,7 +24,8 @@ must hold the parents of the app folder (`mkdir -p $sandbox/dev_hdd0/tmp`):
 `sysLv2FsMkdir` makes one level, as on the console. `sysLv2FsStat` fills
 the mode (the type and permission bits: LV2's octal values are POSIX's), the
 owner, the times, the size and the block size from the host's `stat`. `smoke/` is the smallest
-app (one screen); CI builds it and takes one snapshot. `kitcheck/` calls the
+app (a home screen and three pages, R1); CI builds it, takes its snapshots, and builds it again
+with an 8 KB vertex area (the drains, below). `kitcheck/` calls the
 kit and checks the results against the headers' rules; CI runs it and it
 exits 1 on a failed check. An app keeps its own
 run script with its scenarios (PS3 Health: `run.zsh`, `shots.zsh`).
@@ -38,7 +39,7 @@ defines the strong ones in its `tools/preview/pv_app.c`. PS3 Health's
 the temperatures (383) and the fan duty (409); an app with a network screen
 defines `netSocket`, `netConnect`, `netSend` and `netRecv` for a fake peer.
 The weak list is at the end of `stubs.c`: every socket call of PSL1GHT's
-`net/net.h` that a TCP or UDP client uses (also `netPoll`, `netSelect`,
+`net/net.h` that a TCP or UDP client uses (also `netPoll`,
 `netGetSockOpt`, `netShutdown`, `netErrnoLoc` for `net_errno`), each failing,
 and the stub headers have PSL1GHT's constants (`SO_ERROR`, `MSG_DONTWAIT`,
 `NET_EWOULDBLOCK` ...), so an app's network code compiles in the preview.
@@ -81,8 +82,9 @@ flush; then `raster.c` draws them, and the vertices that they used become NaN.
 The vertex area starts on a 128-byte line (`posix_memalign`), as on the
 console, so the address of a `gfx_block` is aligned on both.
 A draw that reads a vertex from before the last drain draws nothing, and the
-snapshot shows it. A build with a small vertex area drains many times in
-every frame, and must give the same snapshots:
+snapshot shows it. A build with a small vertex area drains in every frame,
+and must give the same snapshots (CI checks it on the smoke app's four
+snapshots, and that the build drained, by `PV_STAT`'s count):
 
     PV_CFLAGS='-DGFX_VTX_BYTES=8192' zsh tools/preview/build.zsh APP=<app folder>
 
@@ -90,7 +92,10 @@ every frame, and must give the same snapshots:
 `memcpy`, after `gfx.c`'s checks and with `gfx_rsx.c`'s range rule, so an
 app's RSX test reads back through the same calls on the host; a job's
 request still waits for the main thread's next `gfx_wait`. A gfx trace has
-no line for a copy.
+no line for a copy. `gfx_front` is the first colour buffer in the arena, as
+on the console, and the submit of a frame that gets a snapshot copies the
+raster into it, so `ui_shot` reads it through `gfx_copy_to_main` as on the
+console.
 
 `gfx_vram` gets the RSX memory that gfx leaves free on the console: 249 MB (the
 `gcmGetConfiguration` size) less what `gfx_rsx.c` takes first, in its order
