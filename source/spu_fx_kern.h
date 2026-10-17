@@ -57,6 +57,12 @@ static inline fxu fx_bits(fxv a) { return (fxu)a; }
 static inline fxv fx_float(fxu a) { return (fxv)a; }
 static inline uint32_t fxu_lane(fxu a, int j) { return spu_extract(a, j); }
 static inline float fxv_lane(fxv a, int j) { return spu_extract(a, j); }
+/* scalars: b when x > y, else a; one compare and one select (spu-gcc 7.2
+ * branches on a plain ?:, and a taken branch without a hint costs 18 cycles) */
+static inline float fx_selgt(float a, float b, float x, float y)
+{
+    return spu_extract(spu_sel(spu_promote(a, 0), spu_promote(b, 0), spu_cmpgt(spu_promote(x, 0), spu_promote(y, 0))), 0);
+}
 /* t[i] for each lane */
 static inline fxu fxu_gather(const uint32_t *t, fxu i)
 {
@@ -138,6 +144,7 @@ static inline fxu fx_bits(fxv a) { fxu r; memcpy(&r, &a, sizeof r); return r; }
 static inline fxv fx_float(fxu a) { fxv r; memcpy(&r, &a, sizeof r); return r; }
 static inline uint32_t fxu_lane(fxu a, int j) { return a.u[j]; }
 static inline float fxv_lane(fxv a, int j) { return a.f[j]; }
+static inline float fx_selgt(float a, float b, float x, float y) { return x > y ? b : a; }
 static inline fxu fxu_gather(const uint32_t *t, fxu i) FX_U(t[i.u[k]])
 static inline fxu fxu_cat(fxu a, fxu b, int n) FX_U(k + n < 4 ? a.u[k + n] : b.u[k + n - 4])
 static inline fxu fxu_pick(fxu a, fxu b, int i, int j, int l, int m)
@@ -883,13 +890,14 @@ typedef struct {
 #define FX_SCREEN_W 1920.0f
 #define FX_SCREEN_H 1080.0f
 
-/* a new particle i: at the top, or anywhere on the screen (first) */
-static inline void fx_spawn(fx_rain_state *st, uint32_t i, float fall, int first)
+/* a new particle i of layer i % 3: at the top, or anywhere on the screen
+ * (first) */
+static inline void fx_spawn(fx_rain_state *st, uint32_t i, uint32_t layer, float fall, int first)
 {
     static const float sp[2][3] = {{0.55f, 0.75f, 1.0f}, {0.6f, 0.8f, 1.0f}};
     static const float al[3] = {0x30 / 255.0f, 0x60 / 255.0f, 0x90 / 255.0f};
     fx_drop *p = &st->d[i];
-    uint32_t layer = i % 3, snow = st->kind == FX_FLAKES;
+    uint32_t snow = st->kind == FX_FLAKES;
     p->x = -FX_RAIN_MARGIN + fx_rnd(&st->rng) * (FX_SCREEN_W + 2 * FX_RAIN_MARGIN);
     p->vy = fall * sp[snow][layer] * (0.9f + 0.2f * fx_rnd(&st->rng));
     float r = fx_rnd(&st->rng);
@@ -897,13 +905,15 @@ static inline void fx_spawn(fx_rain_state *st, uint32_t i, float fall, int first
     p->k = snow ? fx_rnd(&st->rng) : al[layer] * (0.85f + 0.3f * fx_rnd(&st->rng));
 }
 
-/* x back into [-margin, screen + margin) when the wind took it out */
+/* x back into [-margin, screen + margin) when the wind took it out: both
+ * sums and two selects, the tests on x as it came (x + span when x < lo,
+ * x - span when x >= lo + span). (Until 2026-10-17 an if and an else if:
+ * spu-gcc took two unhinted branches when x stayed, about 36 cycles.) */
 static inline float fx_xwrap(float x)
 {
     const float lo = -FX_RAIN_MARGIN, span = FX_SCREEN_W + 2 * FX_RAIN_MARGIN;
-    if (x < lo) x += span;
-    else if (x >= lo + span) x -= span;
-    return x;
+    float r = fx_selgt(x, x + span, lo, x);
+    return fx_selgt(x - span, r, lo + span, x);
 }
 
 /* the word sum of n vertices (each float as its bits) */
@@ -951,10 +961,11 @@ typedef struct {
 } fx_rain_k;
 
 /* Drop i one step, then its quad: a parallelogram from the tail (alpha 0)
- * to the head, its width horizontal (1, 1.5 or 2 px by layer). A drop whose
- * tail passed the bottom comes back at the top; a near one may leave a
- * splash. */
-static inline fx_vtx *fx_drop_step(fx_rain_state *st, const fx_rain_k *k, uint32_t i, fx_vtx *q)
+ * to the head, its width horizontal (1, 1.5 or 2 px by layer, i % 3: the
+ * job counts it, as the SPU's i % 3 is a division loop of about 50 cycles).
+ * A drop whose tail passed the bottom comes back at the top; a near one may
+ * leave a splash. */
+static inline fx_vtx *fx_drop_step(fx_rain_state *st, const fx_rain_k *k, uint32_t i, uint32_t layer, fx_vtx *q)
 {
     static const float hw[3] = {0.5f, 0.75f, 1.0f};
     fx_drop *p = &st->d[i];
@@ -962,18 +973,18 @@ static inline fx_vtx *fx_drop_step(fx_rain_state *st, const fx_rain_k *k, uint32
     p->x = fx_xwrap(p->x + k->wind * k->dt);
     float tx = p->x - k->wind * FX_STREAK, ty = p->y - p->vy * FX_STREAK;
     if (ty > FX_SCREEN_H) {
-        if (i % 3 == 2 && fx_rnd(&st->rng) < 0.34f) {
+        if (layer == 2 && fx_rnd(&st->rng) < 0.34f) {
             fx_splash *s = &st->s[st->next++ % FX_SPLASHES];
             s->x = p->x;
             s->y = FX_SCREEN_H - 6.0f - 28.0f * fx_rnd(&st->rng);
             s->age = 0;
             s->live = 1;
         }
-        fx_spawn(st, i, k->fall, 0);
+        fx_spawn(st, i, layer, k->fall, 0);
         tx = p->x - k->wind * FX_STREAK;
         ty = p->y - p->vy * FX_STREAK;
     }
-    float w = hw[i % 3];
+    float w = hw[layer];
     uint32_t a = (uint32_t)(fx_clampf(p->k * k->alpha, 0.0f, 1.0f) * 255.0f + 0.5f);
     fxv x = fxv4(k->ox + tx - w, k->ox + tx + w, k->ox + p->x + w, k->ox + p->x - w);
     fxv y = fxv4(k->oy + ty, k->oy + ty, k->oy + p->y, k->oy + p->y);
@@ -981,19 +992,19 @@ static inline fx_vtx *fx_drop_step(fx_rain_state *st, const fx_rain_k *k, uint32
     return fx_quad(q, x, y, c, FXV(0.0f), FXV(0.0f));
 }
 
-/* Flake i one step, then its quad: a square of 4, 6 or 9 px by layer for
- * the glow texture, swaying 20 px at 0.5 Hz. */
-static inline fx_vtx *fx_flake_step(fx_rain_state *st, const fx_rain_k *k, uint32_t i, fx_vtx *q)
+/* Flake i one step, then its quad: a square of 4, 6 or 9 px by layer (i %
+ * 3, from the job) for the glow texture, swaying 20 px at 0.5 Hz. */
+static inline fx_vtx *fx_flake_step(fx_rain_state *st, const fx_rain_k *k, uint32_t i, uint32_t layer, fx_vtx *q)
 {
     static const float sz[3] = {2.0f, 3.0f, 4.5f};
     static const float al[3] = {0x70 / 255.0f, 0xa0 / 255.0f, 0xd0 / 255.0f};
     fx_drop *p = &st->d[i];
-    float h = sz[i % 3];
+    float h = sz[layer];
     p->y += p->vy * k->dt;
     p->x = fx_xwrap(p->x + k->wind * 0.35f * k->dt);
-    if (p->y - h > FX_SCREEN_H) fx_spawn(st, i, k->fall, 0);
+    if (p->y - h > FX_SCREEN_H) fx_spawn(st, i, layer, k->fall, 0);
     float cx = k->ox + p->x + 20.0f * fx_sin2pi(k->sway + p->k), cy = k->oy + p->y;
-    uint32_t a = (uint32_t)(fx_clampf(al[i % 3] * k->alpha, 0.0f, 1.0f) * 255.0f + 0.5f);
+    uint32_t a = (uint32_t)(fx_clampf(al[layer] * k->alpha, 0.0f, 1.0f) * 255.0f + 0.5f);
     fxv x = fxv4(cx - h, cx + h, cx + h, cx - h), y = fxv4(cy - h, cy - h, cy + h, cy + h);
     return fx_quad(q, x, y, FXU(k->rgb << 8 | a), fxv4(0, 1, 1, 0), fxv4(0, 0, 1, 1));
 }
@@ -1044,17 +1055,19 @@ static inline uint32_t fx_rain_job(const fx_ctl *c, fx_rain_state *st, fx_vtx (*
         for (uint32_t i = 0; i < FX_SPLASHES; i++) st->s[i].live = 0;
         st->ready = 1;
     }
-    for (; st->live < count; st->live++) fx_spawn(st, st->live, k.fall, 1);
+    for (; st->live < count; st->live++) fx_spawn(st, st->live, st->live % 3, k.fall, 1);
     for (uint32_t i = 0; i < FX_SPLASHES; i++)
         if (st->s[i].live && ++st->s[i].age >= 6) st->s[i].live = 0;
-    uint32_t total = fx_rain_quads(count, kind), sum = 0;
+    uint32_t total = fx_rain_quads(count, kind), sum = 0, layer = 0;   /* layer: j % 3 */
     for (uint32_t done = 0, n = 0; done < total; n++) {
         uint32_t b = n & 1, m = total - done < FX_RAIN_CHUNK ? total - done : FX_RAIN_CHUNK;
         if (n >= 2) io->wait(io, b);
         fx_vtx *v = q[b];
         for (uint32_t j = done; j < done + m; j++) {
-            if (j < count) v = kind == FX_FLAKES ? fx_flake_step(st, &k, j, v) : fx_drop_step(st, &k, j, v);
+            if (j < count)
+                v = kind == FX_FLAKES ? fx_flake_step(st, &k, j, layer, v) : fx_drop_step(st, &k, j, layer, v);
             else v = fx_splash_quad(st, &k, j - count, v);
+            layer = (layer + 1) & -(uint32_t)(layer != 2);             /* no branch: 0 after 2 */
         }
         if (c->p.rain.check) sum += fx_vsum(q[b], 4 * m);
         io->put(io, 0, done * 80, q[b], m * 80, b);
