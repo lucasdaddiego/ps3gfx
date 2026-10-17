@@ -92,6 +92,26 @@ jobs:
           done
           for f in fx digits icons; do test -s "$t1/$f.ppm"; cmp "$t1/$f.ppm" "$t2/$f.ppm"; done
 
+      # A build with a small vertex area (8 KB: 409 vertices) drains in the
+      # smoke's frames, the default build in none, and must give the same
+      # snapshots (tools/preview/README.md). PV_STAT's count of drains shows
+      # that it drained. Its build replaces the smoke's pv: the last step that
+      # runs it.
+      - name: Smoke with a small vertex area (the drains), the same four snapshots
+        run: |
+          pv=tools/preview/smoke/tools/preview/build/pv
+          def=$(mktemp -d) small=$(mktemp -d)
+          for t in "$def" "$small"; do
+            if [ "$t" = "$small" ]; then PV_CFLAGS='-DGFX_VTX_BYTES=8192' zsh tools/preview/build.zsh APP=tools/preview/smoke; fi
+            mkdir -p "$t/home/dev_hdd0/tmp" "$t/pages/dev_hdd0/tmp"
+            PV_ROOT=$t/home PV_OUT=$t PV_SCRIPT="3:SNAP=home 4:EXIT" $pv
+            PV_ROOT=$t/pages PV_OUT=$t PV_STAT=1 PV_SCRIPT="4:R1 6:SNAP=fx 7:R1 9:SNAP=digits 10:R1 12:SNAP=icons 13:EXIT" $pv 2> "$t/stat.txt" || { cat "$t/stat.txt"; exit 1; }
+            grep stat: "$t/stat.txt"
+          done
+          drains=$(sed -n 's/.*; \([0-9]*\) drains in .*/\1/p' "$small/stat.txt")
+          [ "${drains:-0}" -gt 0 ] || { echo "the small build did not drain"; exit 1; }
+          for f in home fx digits icons; do test -s "$small/$f.ppm"; cmp "$def/$f.ppm" "$small/$f.ppm"; done
+
       - name: Kit check (the kit's rules on the preview, a screenshot against a snapshot)
         run: |
           zsh tools/preview/build.zsh APP=tools/preview/kitcheck

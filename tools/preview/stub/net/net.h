@@ -30,6 +30,5 @@ s32 *netErrnoLoc(void); s32 netShutdown(s32 s, s32 how);
 ssize_t netRecvFrom(s32 s, void *b, size_t l, s32 f, struct sockaddr *from, socklen_t *fl);
 ssize_t netSendTo(s32 s, const void *b, size_t l, s32 f, const struct sockaddr *to, socklen_t tl);
 s32 netPoll(struct pollfd *fds, nfds_t nfds, s32 timeout);
-s32 netSelect(s32 nfds, fd_set *r, fd_set *w, fd_set *e, struct timeval *t);
 s32 netGetSockOpt(s32 s, s32 level, s32 opt, void *v, socklen_t *l);
 #endif

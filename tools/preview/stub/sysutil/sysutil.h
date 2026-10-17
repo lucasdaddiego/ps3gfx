@@ -15,5 +15,4 @@ s32 sysUtilCheckCallback(void);
 #define SYSUTIL_SYSTEMPARAM_ID_TIMEZONE 0x0116
 #define SYSUTIL_SYSTEMPARAM_ID_SUMMERTIME 0x0117
 s32 sysUtilGetSystemParamInt(s32 id, s32 *value);
-s32 sysUtilGetSystemParamString(s32 id, char *buf, u32 bufsize);
 #endif

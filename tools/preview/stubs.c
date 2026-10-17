@@ -203,12 +203,6 @@ __attribute__((weak)) s32 sysUtilGetSystemParamInt(s32 id, s32 *value)
     default: return (s32)0x8002b102;                     /* an error rc: no other setting */
     }
 }
-__attribute__((weak)) s32 sysUtilGetSystemParamString(s32 id, char *buf, u32 bufsize)
-{
-    (void)id;
-    if (bufsize) buf[0] = 0;
-    return (s32)0x8002b102;
-}
 u64 sysGetSystemTime(void) { return sim_us; }
 s32 sysGetCurrentTime(u64 *sec, u64 *nsec) { *sec = 1791460800ull + sim_us / 1000000; *nsec = 0; return 0; }
 s32 sysUsleep(u32 us) { (void)us; usleep(1000); return 0; }
@@ -311,7 +305,6 @@ __attribute__((weak)) s32 netShutdown(s32 s, s32 h) { (void)s; (void)h; return -
 __attribute__((weak)) ssize_t netRecvFrom(s32 s, void *b, size_t l, s32 f, struct sockaddr *a, socklen_t *al) { (void)s; (void)b; (void)l; (void)f; (void)a; (void)al; return -1; }
 __attribute__((weak)) ssize_t netSendTo(s32 s, const void *b, size_t l, s32 f, const struct sockaddr *a, socklen_t al) { (void)s; (void)b; (void)l; (void)f; (void)a; (void)al; return -1; }
 __attribute__((weak)) s32 netPoll(struct pollfd *p, nfds_t n, s32 t) { (void)p; (void)n; (void)t; return -1; }
-__attribute__((weak)) s32 netSelect(s32 n, fd_set *r, fd_set *w, fd_set *e, struct timeval *t) { (void)n; (void)r; (void)w; (void)e; (void)t; return -1; }
 __attribute__((weak)) s32 netGetSockOpt(s32 s, s32 lv, s32 o, void *v, socklen_t *l) { (void)s; (void)lv; (void)o; (void)v; (void)l; return -1; }
 __attribute__((weak)) s32 netCtlInit(void) { return 0; }
 __attribute__((weak)) void netCtlTerm(void) {}

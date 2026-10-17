@@ -8,6 +8,9 @@
  *     them, and the vertices they used become NaN: a draw that reads a vertex
  *     from before the last drain draws nothing, and the snapshot shows it.
  *   - gfx_copy_to_main is a memcpy out of the arena.
+ *   - gfx_front is the first colour buffer, in the arena: the submit of a
+ *     frame that gets a snapshot copies the raster into it, so ui_shot reads
+ *     it through gfx_copy_to_main, as on the console.
  * PV_STAT=1 prints the vertices, draws and drains per frame at exit. */
 #include <stdint.h>
 #include <stdio.h>
@@ -26,6 +29,7 @@ _Static_assert(GFX_TRIANGLES == RASTER_TRIANGLES && GFX_TRIANGLE_STRIP == RASTER
 
 static u8 *arena;
 static u32 arena_next;
+static u32 *front, front_pitch;              /* the first colour buffer, for gfx_front */
 static gfx_vtx *area;
 static raster_vtx *rv;                       /* one draw in output pixels */
 static float vp[4];                          /* the viewport: tx, ty, sx, sy */
@@ -64,6 +68,13 @@ static void stat_exit(void)
                 frames, max_vtx, max_vtx * (long)sizeof(gfx_vtx), max_at, max_draws, drains, frames_drained);
 }
 
+/* The raster into the first colour buffer, row by row at its pitch. */
+static void front_copy(void)
+{
+    const u32 *r = raster_buffer();
+    for (int y = 0; y < gfx_h; y++) memcpy(front + (size_t)y * (front_pitch / 4), r + (size_t)y * gfx_w, (size_t)gfx_w * 4);
+}
+
 int gfx_be_init(u32 vtx_bytes, gfx_vtx **out)
 {
     videoState st;
@@ -82,10 +93,14 @@ int gfx_be_init(u32 vtx_bytes, gfx_vtx **out)
     rv = malloc(vtx_bytes / sizeof(gfx_vtx) * sizeof *rv);
     if (!arena || !area || !rv) return -1;
     /* gfx_rsx.c's blocks: the two colour buffers, the two fragment programs */
-    if (!alloc(pitch * gfx_h, 64, NULL) || !alloc(pitch * gfx_h, 64, NULL) || !alloc(256, 256, NULL) || !alloc(256, 256, NULL))
+    u32 *fb0 = alloc(pitch * gfx_h, 64, NULL);
+    if (!fb0 || !alloc(pitch * gfx_h, 64, NULL) || !alloc(256, 256, NULL) || !alloc(256, 256, NULL))
         return -1;
     raster_init(gfx_w, gfx_h);
     raster_clear(0xff0a1222);
+    front = fb0;
+    front_pitch = pitch;
+    front_copy();
     atexit(stat_exit);
     *out = area;
     return 0;
@@ -153,6 +168,7 @@ void gfx_be_drain(void)
 void gfx_be_submit(void)
 {
     fence();
+    if (pv_drawing()) front_copy();          /* the frame that the snapshot shows */
     frames++;
     if (f_vtx > max_vtx) max_vtx = f_vtx, max_at = frames - 1;
     if (f_draws > max_draws) max_draws = f_draws;
@@ -177,9 +193,11 @@ int gfx_be_copy(const void *src, void *dst, u32 bytes)
 
 void gfx_be_nap(void) { usleep(200); }
 
-/* The raster's buffer: it holds the last frame that a snapshot rasterized. */
+/* The first colour buffer: it holds the last frame that a snapshot
+ * rasterized. The raster's own buffer is outside the arena, so
+ * gfx_copy_to_main would refuse its rows. */
 const volatile u32 *gfx_front(u32 *pitch)
 {
-    if (pitch) *pitch = (u32)gfx_w * 4;
-    return area ? raster_buffer() : NULL;
+    if (pitch) *pitch = front_pitch;
+    return front;
 }

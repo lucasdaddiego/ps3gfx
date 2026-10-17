@@ -7,7 +7,8 @@
  *       PV_SCRIPT="10-70:DOWN 80-82:DOWN 50:SNAP=kit" tools/preview/kitcheck/tools/preview/build/pv
  * It prints each failed check and exits 1, or prints "kitcheck: all checks
  * passed" and exits 0 after frame 100. Frame 50's ui_shot, shot.ppm in the
- * app folder, must equal the snapshot kit.ppm byte for byte (CI: cmp).
+ * app folder, must equal the snapshot kit.ppm byte for byte (CI: cmp), and
+ * the front buffer's rows come by gfx_copy_to_main, not by ui_shot's reads.
  * Before them, gfx_copy_to_main between frames (a memcpy here).
  * Then gesture's two presses on the same pad frames, the text calls' returns
  * and the bytes past ASCII before text_utf8, and at the end a run_job whose
@@ -140,6 +141,18 @@ static void copies(void)
     CHECK(gfx_copy_to_main(host, dst, 128) == GFX_COPY_ERANGE);
     CHECK(gfx_copy_to_main(p + 4, dst, 128) == GFX_COPY_EARG);
     free(dst);
+}
+
+/* the front buffer is RSX memory on a 128-byte line, as on the console: its
+ * rows come by gfx_copy_to_main (ui_shot's path), the same bytes */
+static void front_rows(void)
+{
+    u32 pitch = 0;
+    const volatile u32 *px = gfx_front(&pitch);
+    u32 *rows = malloc((size_t)pitch * 2);
+    CHECK(px && rows && ((uintptr_t)px & 127) == 0);
+    if (px && rows) CHECK(gfx_copy_to_main((const void *)px, rows, pitch * 2) == 0 && !memcmp(rows, (const void *)px, pitch * 2));
+    free(rows);
 }
 
 /* UTF-8 after text_utf8: ASCII measures and draws as before, the fallbacks
@@ -848,7 +861,10 @@ int main(void)
         begin_frame();
         footer("L1 previous  R1 next  L1/R1 page  CROSS play");
         ui_flip();
-        if (f == 50) CHECK(ui_shot(DIR "/shot.ppm") == 0);    /* the snapshot's frame: the raster holds it */
+        if (f == 50) {                                      /* the snapshot's frame: the front buffer holds it */
+            CHECK(ui_shot(DIR "/shot.ppm") == 0);
+            front_rows();
+        }
     }
     int want[128] = {0}, ok = 1;
     want[10] = want[80] = 1;
