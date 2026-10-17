@@ -1,10 +1,13 @@
 /* Host test of gfx's front end (source/gfx/gfx.c) on a back end that records
  * the draws: the batching, the vertex area and its drains, the blocks, the
  * viewport, the frame, the submit and the wait, and the copy's rules and its
- * job request. CI runs it with a small area of 409 vertices:
- *   cc -std=c99 -Wall -Wextra -DGFX_VTX_BYTES=8192 -I tools/preview/stub -I source/gfx \
+ * job request (a job that gives up runs in a second thread). CI runs it with a
+ * small area of 409 vertices:
+ *   cc -std=c99 -Wall -Wextra -pthread -DGFX_VTX_BYTES=8192 -I tools/preview/stub -I source/gfx \
  *      test/test_gfx.c source/gfx/gfx.c */
 #define _POSIX_C_SOURCE 200809L
+#include <pthread.h>
+#include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,7 +25,8 @@ static struct { int type; u32 first, n; const gfx_tex *t; } draws[256];
 static int nd, drains, begins, ends, waits, exits, viewports;
 static int outstanding;                      /* a submit without its wait: the back end gets nothing else */
 static int open_frame;                       /* between a begin and its submit */
-static int copies, naps, nap_mode;           /* nap_mode 1: a nap draws a frame, as the drawing thread does; 2: and asks again first */
+static int copies, naps, nap_mode;           /* nap_mode 1: a nap draws a frame, as the drawing thread does; 2: and asks again first; 3: a yield */
+static volatile int copy_hold, copy_in, job_gone;   /* 3: the copy runs until the job has given up */
 static int nested_rc;
 static u8 vram[4096] __attribute__((aligned(128)));   /* the RSX memory of the copies */
 static float last_vp[4];
@@ -94,6 +98,8 @@ int gfx_be_copy(const void *src, void *dst, u32 bytes)
     const u8 *s = src;
     CHECK(!outstanding && !open_frame);
     copies++;
+    copy_in = 1;
+    while (copy_hold && !job_gone) sched_yield();
     if (s < vram || bytes > sizeof vram || (size_t)(s - vram) > sizeof vram - bytes) return GFX_COPY_ERANGE;
     memcpy(dst, s, bytes);
     return 0;
@@ -104,6 +110,10 @@ static u8 job_dst[256];
 void gfx_be_nap(void)
 {
     naps++;
+    if (nap_mode == 3) {                     /* the naps count from the take: no ENOFRAME on a slow drawing thread */
+        while (!copy_in) sched_yield();
+        return;
+    }
     if (nap_mode == 2) nested_rc = gfx_copy_to_main_job(vram, job_dst, 128);   /* the first request still waits */
     if (nap_mode) {
         gfx_begin();
@@ -375,6 +385,44 @@ static void copy_job(void)
     nap_mode = 0;
 }
 
+static int giveup_rc;
+
+static void *giveup_job(void *arg)
+{
+    (void)arg;
+    giveup_rc = gfx_copy_to_main_job(vram + 256, job_dst, 128);
+    __sync_synchronize();
+    job_gone = 1;
+    return NULL;
+}
+
+/* A job gives up on a taken request after 50,000 naps (ETIME), while the
+ * drawing thread still copies; when that copy ends the slot is free again. */
+static void copy_giveup(void)
+{
+    pthread_t t;
+    reset();
+    nap_mode = 3;
+    copy_hold = 1;
+    copy_in = job_gone = 0;
+    if (pthread_create(&t, NULL, giveup_job, NULL)) {
+        CHECK(!"pthread_create");
+        return;
+    }
+    while (!job_gone) {                      /* the drawing thread: frames until the job has given up */
+        gfx_begin();
+        gfx_prim(GFX_QUADS, 4);
+        gfx_end();
+    }
+    pthread_join(t, NULL);
+    CHECK(giveup_rc == GFX_COPY_ETIME && naps == 50000 && copies == 1);
+    copy_hold = 0;
+    reset();
+    nap_mode = 1;
+    CHECK(gfx_copy_to_main_job(vram, job_dst, 128) == 0 && copies == 1);   /* not EBUSY: the slot is free */
+    nap_mode = 0;
+}
+
 int main(void)
 {
     if (gfx_init() != 0) {
@@ -389,6 +437,7 @@ int main(void)
     submit();
     copy();
     copy_job();
+    copy_giveup();
     frames();
     if (fails) {
         printf("%d checks failed\n", fails);

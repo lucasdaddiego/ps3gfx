@@ -107,9 +107,11 @@ void gfx_last_counts(u32 *vertices, u32 *draws, u32 *drains);
  *     its next gfx_wait, and the call returns when it has: one request at a
  *     time. Never from the drawing thread: it would wait for itself.
  * After GFX_COPY_ETIME the RSX may still write the vertex area, and a job's
- * dst may still be written by the drawing thread: keep dst allocated. Every
- * later copy then fails at once (GFX_COPY_ETIME, or GFX_COPY_EBUSY for a
- * job). The preview copies with memcpy, with the same rules. */
+ * dst may still be written by the drawing thread: keep dst allocated. After
+ * a round that timed out every later copy fails at once (GFX_COPY_ETIME); a
+ * job's next request gets GFX_COPY_EBUSY until the drawing thread has ended
+ * the copy that the job gave up on. The preview copies with memcpy, with the
+ * same rules. */
 #define GFX_COPY_MAX      (16u << 20)
 #define GFX_COPY_EARG     -1                 /* src or bytes not a multiple of 128, bytes 0 or over GFX_COPY_MAX */
 #define GFX_COPY_ERANGE   -2                 /* src to src + bytes is not in RSX local memory */

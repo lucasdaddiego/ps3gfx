@@ -181,7 +181,8 @@ void gfx_exit(void)
 /* ---- the copy --------------------------------------------------------------- */
 
 /* A job's copy request, from gfx_copy_to_main_job to the drawing thread's
- * next gfx_wait: 0 none, 1 being written, 2 posted, 3 taken, 4 done. */
+ * next gfx_wait: 0 none, 1 being written, 2 posted, 3 taken, 4 done, 5 taken
+ * and given up by the job (the drawing thread frees the slot at the end). */
 static volatile int creq;
 static const void *creq_src;
 static void *creq_dst;
@@ -201,7 +202,7 @@ static void copy_serve(void)
     if (creq != 2 || !__sync_bool_compare_and_swap(&creq, 2, 3)) return;
     creq_rc = gfx_be_copy(creq_src, creq_dst, creq_bytes);
     __sync_synchronize();
-    creq = 4;
+    if (!__sync_bool_compare_and_swap(&creq, 3, 4)) creq = 0;   /* 5: no one waits for it */
 }
 
 int gfx_copy_to_main(const void *src, void *dst, u32 bytes)
@@ -215,8 +216,8 @@ int gfx_copy_to_main(const void *src, void *dst, u32 bytes)
 
 /* A request that no frame took in about 2 s is taken back (ENOFRAME). A
  * taken one is waited for: each round of the drawing thread ends within
- * about 2 s. After 8 s more the call gives up (ETIME): the request stays
- * taken, so later calls get EBUSY, and dst may still be written. */
+ * about 2 s. After 8 s more the call gives up (ETIME): dst may still be
+ * written, and later calls get EBUSY until the drawing thread ends the copy. */
 int gfx_copy_to_main_job(const void *src, void *dst, u32 bytes)
 {
     int rc = copy_args(src, bytes);
@@ -229,7 +230,7 @@ int gfx_copy_to_main_job(const void *src, void *dst, u32 bytes)
     creq = 2;
     for (int i = 0; creq != 4; i++) {
         if (i >= JOB_POLLS && __sync_bool_compare_and_swap(&creq, 2, 0)) return GFX_COPY_ENOFRAME;
-        if (i >= 5 * JOB_POLLS) return GFX_COPY_ETIME;
+        if (i >= 5 * JOB_POLLS && __sync_bool_compare_and_swap(&creq, 3, 5)) return GFX_COPY_ETIME;
         gfx_be_nap();
     }
     __sync_synchronize();
