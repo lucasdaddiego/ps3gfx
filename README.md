@@ -254,8 +254,13 @@ through `gfx_copy_to_main`, as on the console (`tools/preview/README.md`).
 They change PS3 Health's, Cell Bench's and Couch's ELFs. At 1080p the smoke
 app's and the kit check's snapshots keep their bytes, except the smoke app's
 icons page (the icons that went; a turned or scaled icon differs by 1 level
-in a few hundred pixels and by 15 in a few, the new atlas's UVs). No console
-has run them yet: the sky's 1.73 ms above is the program before them.
+in a few hundred pixels and by 15 in a few, the new atlas's UVs). On the
+console (2026-10-19, PS3 Health 2.2.1 rc3 and Couch 0.5.1 rc2, "flawless" in
+the author's words): Health's RSX test read 231 MB back through the copy
+with the first round's `dcbf` pass only, no error, at 201 MB/s (its copies
+now 16 MB, was 126 MB/s with 4 MB), and the sky took 1.42 ms a picture on
+the slowest SPU (1.55 ms at most), SPU 5's rain job 0.003 ms (0.007 ms with
+the sum in every job), Couch's frames 59.85 a second.
 
 ## The RSX copy
 
@@ -659,8 +664,8 @@ unroll`, so each one reloaded its constants and missed its exit branch once a
 quad. On the console (Couch 0.5.1, 2026-10-17) the unrolled sky takes 1.73 ms
 a picture on the slowest SPU, 1.84 to 1.87 ms at most (Couch 0.5.0 on the
 rolled program: 2.23 ms, 2.37 ms at most), about 22 % less. The second
-review's sky (a band's glass from its own cloud samples, 3.19 M) has no
-console time yet. On the host (Apple M4, one thread, the
+review's sky (a band's glass from its own cloud samples, 3.19 M) takes 1.42
+ms (1.55 ms at most; Couch 0.5.1 rc2, 2026-10-19), 18 % less again. On the host (Apple M4, one thread, the
 plain lanes): a sky picture 3.2 ms (three octaves: 2.9 ms; in one run of
 2026-10-17 the band's own glass samples took it from 4.47 to 4.10 ms), an
 aurora picture 2.0 ms, a rain job 0.007 ms.
