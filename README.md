@@ -33,7 +33,7 @@ the memory layout, the source of each RSX word and the shader recipe):
 
 
 `<ps3gfx/image.h>`, a PNG or JPEG into texels (0.4.0; `source/stb_image.h`,
-public domain, configured for the PS3: no stdio, no SIMD, PNG and JPEG only,
+public domain, configured for the PS3: no stdio, no SIMD, no HDR, PNG and JPEG only,
 a side of 1600 at most):
 - `image_info` (the size, no decode), `image_fit` (the size a decode gives
   within a box: the texture to make first), `image_decode` (the image as

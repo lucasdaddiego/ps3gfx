@@ -222,6 +222,7 @@ jobs:
           malloc
           memalign
           memcpy
+          memset
           sinf
           snprintf
           sqrtf

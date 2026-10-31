@@ -46,6 +46,8 @@ static void a_free(void *p) { (void)p; }   /* the arena is reset at the end of t
 #define STBI_ONLY_JPEG
 #define STBI_ONLY_PNG
 #define STBI_NO_SIMD
+#define STBI_NO_HDR                      /* no HDR or linear paths: they need pow (libm), unused here */
+#define STBI_NO_LINEAR
 #define STBI_NO_THREAD_LOCALS
 #define STBI_NO_FAILURE_STRINGS
 #define STBI_MAX_DIMENSIONS IMAGE_MAX_SIDE
