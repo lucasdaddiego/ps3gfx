@@ -31,6 +31,19 @@ the memory layout, the source of each RSX word and the shader recipe):
   `gfx_be_wait`, `gfx_be_exit`, `gfx_be_copy`, `gfx_be_nap`
   (`gfx_rsx.c` on the console, the preview's `gfx_soft.c` on the host)
 
+
+`<ps3gfx/image.h>`, a PNG or JPEG into texels (0.4.0; `source/stb_image.h`,
+public domain, configured for the PS3: no stdio, no SIMD, PNG and JPEG only,
+a side of 1600 at most):
+- `image_info` (the size, no decode), `image_fit` (the size a decode gives
+  within a box: the texture to make first), `image_decode` (the image as
+  0xAARRGGBB texels scaled down by area averaging to fit the box, never up;
+  on the caller's arena, `IMAGE_ARENA_MIN` 24 MB decodes any image within
+  the limits, nothing kept after the call; -1 for no image, a cut PNG or a
+  side past `IMAGE_MAX_SIDE`, -2 when the arena ran out; a cut JPEG decodes
+  with its missing part filled, so the fetch's byte count tells a cut). The
+  library makes no allocation: an app keeps one arena and one texture (RSX
+  memory is never given back).
 `<ps3gfx/ui.h>`, the frame:
 - the app: `ui_app` (`name`, `version`, `dir`), `ui_init(const ui_app *)`, `ui_end`, `safe_calibrate(int first)`
 - `ui_init_us[UI_T_N]`: `ui_init`'s steps in microseconds (`UI_T_JOURNAL`, `UI_T_PAD`, `UI_T_GFX`, and in it `UI_T_GCM` for `gcmInitBody` and `UI_T_VIDEO` for `videoConfigure`, `UI_T_FONTS`, `UI_T_SAFE`), for an app's start log
@@ -702,6 +715,12 @@ copy.
   a name of 24 characters or more, a name with a space, a name of 80 characters, ok values other than 0 and 1,
   a record written again after one failure, a record cut twice and the next one on its own line, a torn tail
   when the writes fail, a clear whose sync fails, a folder whose path does not fit): `cc -std=c99 -Wall -Wextra -I tools/preview/stub -I source test/test_journal.c source/journal.c source/fs.c test/lv2fs_stub.c`.
+- `test/test_image.c`: the image decoder on the fixtures of `test/fixtures`
+  (a PNG with alpha, a baseline and a progressive JPEG, a 1 x 1 PNG, a wide
+  JPEG, a PNG past the side limit, all made by PIL): the sizes, the scale, a
+  pixel's colour at each size, a cut PNG and a cut JPEG, an arena too
+  small, a text that is no image: `cc -std=c99 -Wall -Wextra -I source
+  test/test_image.c source/image.c`, from the repo root.
 - `test/test_fs.c`: the one-line files of `fs_line.c` in a temp folder
   (a missing file, CR LF, no line end, an empty file, the edges, a cut at n,
   the 254-character limit, a write that replaces, a remove, a read error, and

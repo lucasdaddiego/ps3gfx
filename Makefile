@@ -98,7 +98,7 @@ install: $(BUILD)
 	@cp lib/lib$(TARGET).a $(PORTLIBS)/lib/
 	@cp source/gfx/gfx.h source/ui.h source/fs.h source/journal.h source/spu_kit.h $(PORTLIBS)/include/ps3gfx/
 	@cp source/digits.h source/icons.h source/icons_ids.h source/fx.h $(PORTLIBS)/include/ps3gfx/
-	@cp source/spu_fx.h source/spu_fx_kern.h $(PORTLIBS)/include/ps3gfx/
+	@cp source/spu_fx.h source/spu_fx_kern.h source/image.h $(PORTLIBS)/include/ps3gfx/
 	@cp OFL.txt LICENSES/PHOSPHOR.txt $(PORTLIBS)/share/ps3gfx/
 	@rev=$$(git rev-parse HEAD 2>/dev/null) && { git diff --quiet HEAD 2>/dev/null || rev=$$rev-dirty; } || rev=unknown; \
 		echo $$rev > $(PORTLIBS)/share/ps3gfx/COMMIT
